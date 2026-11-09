@@ -82,7 +82,7 @@ export async function updateCourse(id: string, patch: Partial<Course>) {
   const next = { ...cur, ...patch };
   const db = await getDb();
   await db.runAsync(
-    `UPDATE courses SET title=?, subject=?, level=?, school=?, progress=?, identity_json=?, plan_json=?, source_name=? WHERE id=?`,
+    `UPDATE courses SET title=?, subject=?, level=?, school=?, progress=?, identity_json=?, plan_json=?, source_name=?, source_kind=? WHERE id=?`,
     [
       next.title,
       next.subject,
@@ -92,6 +92,7 @@ export async function updateCourse(id: string, patch: Partial<Course>) {
       next.identityJson,
       next.planJson,
       next.sourceName,
+      next.sourceKind,
       id,
     ]
   );
@@ -411,8 +412,8 @@ export async function getExperience(id: string): Promise<ExperienceRow | null> {
 
 export const FREE_CHAT_COURSE_ID = "crs_discussion_libre";
 
-export function isFreeChatCourse(id?: string | null): boolean {
-  return !!id && id === FREE_CHAT_COURSE_ID;
+export function isFreeChatCourse(course?: Pick<Course, "sourceKind"> | null): boolean {
+  return !!course && course.sourceKind === "libre";
 }
 
 export async function ensureFreeChatCourse(): Promise<Course> {

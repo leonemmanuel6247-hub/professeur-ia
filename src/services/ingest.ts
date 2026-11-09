@@ -5,7 +5,7 @@ import { AiProfile, Course, CoursePlanSection } from "../types";
 import { LlmMessage } from "../llm/types";
 import { chatWithFallback } from "../llm/router";
 import { fillPrompt } from "../prompts/defaults";
-import { addChunk, addPage, createCourse, updateCourse } from "./courses";
+import { addChunk, addPage, createCourse, updateCourse, listPages, getCourse } from "./courses";
 import {
   assertSize,
   chunkText,
@@ -148,13 +148,12 @@ function looksLikeRealText(text: string): boolean {
   return words > 30;
 }
 
-async function ingestPdf(
+async function extractPdfPages(
   uri: string,
   name: string,
   profiles: AiProfile[],
-  promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
+): Promise<{ pages: { number: number; text: string }[]; usedVision: boolean }> {
   onProgress("Lecture du PDF…", 0.1);
   const b64 = await readAsBase64(uri);
   const readers = profiles.filter((p) => p.supportsNativePdf);
@@ -220,16 +219,25 @@ pages = splitIntoPages(res.text).map((t, i) => ({ number: i + 1, text: t }));
       "Le texte extrait du PDF est quasiment vide. Le document est probablement scanne sans couche texte. Utilise un profil Gemini (lecture PDF native) ou photographie les pages."
     );
   }
-  return persistCourse(name, "pdf", pages, profiles, promptTpl, onProgress, usedVision);
+  return { pages, usedVision };
 }
 
-async function ingestImages(
-  files: { uri: string; name: string }[],
+async function ingestPdf(
+  uri: string,
+  name: string,
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
 ): Promise<IngestResult> {
-  const vision = profiles.filter((p) => p.supportsVision);
+  const { pages, usedVision } = await extractPdfPages(uri, name, profiles, onProgress);
+  return persistCourse(name, "pdf", pages, profiles, promptTpl, onProgress, usedVision);
+}
+
+async function extractImagePages(
+  files: { uri: string; name: string }[],
+  vision: AiProfile[],
+  onProgress: IngestProgress
+): Promise<{ number: number; text: string }[]> {
   if (!vision.length) throw new Error("Aucun profil avec vision. Ajoute Gemini ou un modele vision.");
   const pages: { number: number; text: string }[] = [];
   for (let i = 0; i < files.length; i++) {
@@ -256,6 +264,17 @@ async function ingestImages(
       "La transcription des images est vide. Verifie que le profil image est bien un modele vision (Gemini) et que les photos sont nettes."
     );
   }
+  return pages;
+}
+
+async function ingestImages(
+  files: { uri: string; name: string }[],
+  profiles: AiProfile[],
+  promptTpl: string,
+  onProgress: IngestProgress
+): Promise<IngestResult> {
+  const vision = profiles.filter((p) => p.supportsVision);
+  const pages = await extractImagePages(files, vision, onProgress);
   return persistCourse(
     files.length > 1 ? "Cours (images)" : files[0].name,
     "images",
@@ -287,7 +306,7 @@ async function persistCourse(
   usedVision: boolean
 ): Promise<IngestResult> {
   onProgress("Creation du cours…", 0.65);
-  const course = await createCourse({
+  let course = await createCourse({
     title: sourceName.replace(/\.[^.]+$/, "") || "Nouveau cours",
     sourceKind: kind,
     sourceName,
@@ -299,32 +318,107 @@ async function persistCourse(
       await addChunk(course.id, pageId, "", c);
     }
   }
+  course = await analyzeAndUpdate(course, pages, profiles, promptTpl, onProgress);
+  onProgress("Termine", 1);
+  return { course, pageCount: pages.length, usedVision };
+}
+
+async function analyzeAndUpdate(
+  course: Course,
+  pages: { number: number; text: string }[],
+  profiles: AiProfile[],
+  promptTpl: string,
+  onProgress: IngestProgress
+): Promise<Course> {
   onProgress("Analyse structure (plan, notations)…", 0.8);
   try {
     const json = await analyzeStructure(pages, profiles, promptTpl);
     if (json) {
       const identity = json.identity ?? {};
       const plan = (json.plan as CoursePlanSection[]) || fallbackPlan(pages.length);
+      const title = String(json.title || course.title);
+      const subject = String(json.subject || "");
+      const level = String(json.level || "");
       await updateCourse(course.id, {
-        title: String(json.title || course.title),
-        subject: String(json.subject || ""),
-        level: String(json.level || ""),
+        title,
+        subject,
+        level,
         identityJson: JSON.stringify(identity),
         planJson: JSON.stringify(plan),
       });
-      course.title = String(json.title || course.title);
-      course.subject = String(json.subject || "");
-      course.level = String(json.level || "");
-      course.identityJson = JSON.stringify(identity);
-      course.planJson = JSON.stringify(plan);
-    } else {
-      await updateCourse(course.id, { planJson: JSON.stringify(fallbackPlan(pages.length)) });
-      course.planJson = JSON.stringify(fallbackPlan(pages.length));
+      return {
+        ...course,
+        title,
+        subject,
+        level,
+        identityJson: JSON.stringify(identity),
+        planJson: JSON.stringify(plan),
+      };
     }
   } catch {
-    await updateCourse(course.id, { planJson: JSON.stringify(fallbackPlan(pages.length)) });
-    course.planJson = JSON.stringify(fallbackPlan(pages.length));
+    /* analyse impossible : plan de secours */
   }
+  const planJson = JSON.stringify(fallbackPlan(Math.max(1, pages.length)));
+  await updateCourse(course.id, { planJson });
+  return { ...course, planJson };
+}
+
+/**
+ * Ingest a PDF or image into an EXISTING course (used by the "discussion libre"
+ * button: the document attached in the chat is processed exactly like a normal
+ * import — extraction, chunks FTS, fiche d'identite, plan — then the course
+ * becomes a regular course like any other).
+ */
+export async function ingestIntoCourse(
+  courseId: string,
+  asset: { uri: string; name: string; mimeType?: string },
+  profiles: AiProfile[],
+  promptTpl: string,
+  onProgress: IngestProgress
+): Promise<IngestResult> {
+  await assertSize(asset.uri);
+  const isPdf = /pdf/i.test(asset.mimeType || asset.name || "");
+  const kind: Course["sourceKind"] = isPdf ? "pdf" : "images";
+  const assetName = asset.name || (isPdf ? "document.pdf" : "page.jpg");
+  const baseName = assetName.replace(/\.[^.]+$/, "") || (isPdf ? "Document" : "Page");
+
+  const already = await listPages(courseId);
+  const offset = already.length;
+
+  let fresh: { number: number; text: string }[] = [];
+  let usedVision = false;
+  if (isPdf) {
+    const extracted = await extractPdfPages(asset.uri, assetName, profiles, onProgress);
+    fresh = extracted.pages;
+    usedVision = extracted.usedVision;
+  } else {
+    const vision = profiles.filter((p) => p.supportsVision);
+    fresh = await extractImagePages([{ uri: asset.uri, name: assetName }], vision, onProgress);
+    usedVision = true;
+  }
+
+  const pages = fresh.map((p, i) => ({ ...p, number: offset + i + 1 }));
+  onProgress("Creation du cours…", 0.65);
+  for (const p of pages) {
+    const pageId = await addPage(courseId, p.number, p.text, "", p.text.length > 80 ? 1 : 0.4);
+    const chunks = chunkText(p.text);
+    for (const c of chunks) {
+      await addChunk(courseId, pageId, "", c);
+    }
+  }
+
+  const allPages = [...already.map((r) => ({ number: r.number, text: r.text })), ...pages];
+  let course = await getCourse(courseId);
+  if (!course) throw new Error("Cours introuvable.");
+  const shouldRename = course.title === "Discussion libre" || course.sourceName === "Sans PDF";
+  const patch: Partial<Course> = {
+    sourceKind: kind,
+    sourceName: assetName,
+    ...(shouldRename ? { title: baseName } : {}),
+  };
+  await updateCourse(courseId, patch);
+  course = { ...course, ...patch };
+  course = await analyzeAndUpdate(course, allPages, profiles, promptTpl, onProgress);
   onProgress("Termine", 1);
   return { course, pageCount: pages.length, usedVision };
 }

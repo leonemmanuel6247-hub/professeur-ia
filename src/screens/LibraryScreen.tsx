@@ -16,7 +16,7 @@ export function LibraryScreen() {
   const setActive = useAppStore((s) => s.setActiveCourse);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
   const visibleCourses = React.useMemo(
-    () => courses.filter((c) => !isFreeChatCourse(c.id)),
+    () => courses.filter((c) => !isFreeChatCourse(c)),
     [courses]
   );
 

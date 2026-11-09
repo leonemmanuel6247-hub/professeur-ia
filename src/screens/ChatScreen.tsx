@@ -16,13 +16,14 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as Clipboard from "expo-clipboard";
 import { useAppStore } from "../store/useAppStore";
-import { Btn, Chip, Screen } from "../components/ui";
+import { Btn, Chip, Screen, ProgressBar } from "../components/ui";
 import { DiamondLogo } from "../components/DiamondLogo";
 import { KatexBubble } from "../components/KatexBubble";
 import { ExperienceWeb } from "../components/ExperienceWeb";
 import { RootStackParamList } from "../navigation";
 import { ChatMessage, Course, SchemaSpec } from "../types";
 import { countChunks, getCourse, parsePlan, saveExperience, saveLesson, updateCourse, listLessons, ensureFreeChatCourse, isFreeChatCourse } from "../services/courses";
+import { ingestIntoCourse } from "../services/ingest";
 import {
   addMessage,
   createConversation,
@@ -61,6 +62,8 @@ export function ChatScreen() {
   const [input, setInput] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
+  const scrollThrottle = useRef(0);
+  const [ingesting, setIngesting] = useState<{ step: string; ratio: number } | null>(null);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
 
   const planSections = course && params.mode === "lesson" ? flattenPlan(parsePlan(course.planJson)) : [];
@@ -104,6 +107,22 @@ export function ChatScreen() {
     })();
   }, [courseId, params.conversationId, params.sectionId]);
 
+  const scrollToEnd = (animated = true) => {
+    listRef.current?.scrollToEnd({ animated });
+  };
+
+  const scrollOnGrow = () => {
+    const now = Date.now();
+    if (now - scrollThrottle.current < 250) return;
+    scrollThrottle.current = now;
+    listRef.current?.scrollToEnd({ animated: false });
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+    return () => clearTimeout(t);
+  }, [messages.length]);
+
   const send = async (text: string, extra?: string, attachment?: Attachment) => {
     if (!course || !convId) {
       Alert.alert("Pas de cours", "Ouvre d'abord un cours depuis la bibliotheque.");
@@ -115,8 +134,8 @@ export function ChatScreen() {
     }
     const userText = text.trim();
     if (!userText && !attachment) return;
-    if (streaming) return;
-    if (!isFreeChatCourse(course.id)) {
+    if (streaming || ingesting) return;
+    if (!isFreeChatCourse(course)) {
       try {
         const n = await countChunks(course.id);
         if (n === 0) {
@@ -155,7 +174,7 @@ export function ChatScreen() {
         params.mode === "lesson"
           ? settings.prompts.lecon || settings.prompts.professeur
           : settings.prompts.professeur;
-      const freeNote = isFreeChatCourse(course.id)
+      const freeNote = isFreeChatCourse(course)
         ? "MODE DISCUSSION LIBRE : aucun cours n'est charge. Si l'eleve a joint un document, appuie-toi dessus ; sinon reponds normalement comme professeur de sciences."
         : "";
       const mergedExtra = [extra, freeNote].filter(Boolean).join("\n") || undefined;
@@ -212,6 +231,7 @@ export function ChatScreen() {
           setMessages((ms) =>
             ms.map((x) => (x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x))
           );
+          scrollOnGrow();
         },
       });
       await addMessage({
@@ -222,6 +242,7 @@ export function ChatScreen() {
         tokens: res.completionTokens,
       });
       setMessages((ms) => ms.map((x) => (x.id === assistantId ? { ...x, content: res.text, tokens: res.completionTokens } : x)));
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
       const blocks = extractSchemaBlocks(res.text);
       if (blocks.spec || blocks.html) {
         await maybeSaveSchema(course.id, blocks.spec, blocks.html, setExp);
@@ -251,6 +272,48 @@ export function ChatScreen() {
     }
   };
 
+  const handleAsset = async (asset: { uri: string; name: string; mimeType?: string }) => {
+    if (!course || ingesting) return;
+    const isPdf = /pdf/i.test(asset.mimeType || asset.name);
+    if (!isFreeChatCourse(course)) {
+      // Cours charge : piece jointe ponctuelle dans le message (comme avant).
+      await send(input, undefined, {
+        uri: asset.uri,
+        mimeType: asset.mimeType || (isPdf ? "application/pdf" : "image/jpeg"),
+        kind: isPdf ? "file" : "image",
+        fileName: asset.name,
+      });
+      return;
+    }
+    // Discussion libre : le document est traite EXACTEMENT comme un import normal
+    // (extraction -> fiche d'identite + plan par l'IA -> RAG), puis le cours
+    // devient un cours ordinaire.
+    const ordered = orderedForRole(profiles, "documents", settings.documentsProviderId || settings.defaultProviderId);
+    if (!ordered.length) {
+      Alert.alert("Profil IA", "Ajoute une cle dans Profils IA.");
+      return;
+    }
+    setIngesting({ step: "Lecture du document…", ratio: 0.08 });
+    setInput("");
+    try {
+      const res = await ingestIntoCourse(
+        course.id,
+        { uri: asset.uri, name: asset.name || (isPdf ? "document.pdf" : "page.jpg"), mimeType: asset.mimeType },
+        ordered,
+        settings.prompts.ingestion,
+        (step, ratio) => setIngesting({ step, ratio })
+      );
+      const updated = await getCourse(course.id);
+      if (updated) setCourse(updated);
+      await refresh();
+      setIngesting(null);
+      go(nav, "Course", { courseId: course.id });
+    } catch (e) {
+      setIngesting(null);
+      Alert.alert("Import impossible", e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const pickPdf = async () => {
     try {
       const res = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });
@@ -265,12 +328,7 @@ export function ChatScreen() {
       } catch {
         /* taille inconnue : on tente quand meme */
       }
-      await send(input, undefined, {
-        uri: asset.uri,
-        mimeType: "application/pdf",
-        kind: "file",
-        fileName: asset.name || "document.pdf",
-      });
+      await handleAsset({ uri: asset.uri, name: asset.name || "document.pdf", mimeType: asset.mimeType || "application/pdf" });
     } catch (e) {
       Alert.alert("PDF", e instanceof Error ? e.message : String(e));
     }
@@ -340,7 +398,7 @@ export function ChatScreen() {
           data={messages}
           keyExtractor={(m) => m.id}
           contentContainerStyle={{ padding: 12, paddingBottom: 32, gap: 4 }}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
           renderItem={({ item }) => (
             <Bubble
               msg={item}
@@ -350,6 +408,45 @@ export function ChatScreen() {
             />
           )}
         />
+        {ingesting ? (
+          <View
+            style={{
+              marginHorizontal: 10,
+              marginTop: 6,
+              padding: 12,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: theme.border,
+              backgroundColor: theme.surface,
+              gap: 6,
+            }}
+          >
+            <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>{ingesting.step}</Text>
+            <ProgressBar value={ingesting.ratio} />
+            <Text style={{ color: theme.textMuted, fontSize: 11 }}>{Math.round(ingesting.ratio * 100)} %</Text>
+          </View>
+        ) : null}
+        {course && isFreeChatCourse(course) && messages.length === 0 ? (
+          <View
+            style={{
+              marginHorizontal: 12,
+              marginTop: 12,
+              padding: 14,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderStyle: "dashed",
+              borderColor: theme.border,
+              backgroundColor: theme.surface,
+              gap: 6,
+            }}
+          >
+            <Text style={{ color: theme.text, fontWeight: "700" }}>Discussion libre</Text>
+            <Text style={{ color: theme.textMuted, lineHeight: 19 }}>
+              Joins ton PDF avec le bouton « PDF » (ou photographie une page) : il sera lu exactement comme un
+              import normal — fiche d'identite, plan, lecons. Ensuite, tout fonctionne pareil.
+            </Text>
+          </View>
+        ) : null}
         <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 }}>
           {ACTIONS.map((a) => (
             <Chip
@@ -384,25 +481,25 @@ export function ChatScreen() {
             onPress={async () => {
               const perm = await ImagePicker.requestCameraPermissionsAsync();
               if (!perm.granted) return;
-              const shot = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+              const shot = await ImagePicker.launchCameraAsync({ quality: 0.8 });
               if (!shot.canceled && shot.assets[0])
-                send(input, undefined, { uri: shot.assets[0].uri, mimeType: "image/jpeg", kind: "image" });
+                await handleAsset({ uri: shot.assets[0].uri, name: `page-${Date.now()}.jpg`, mimeType: "image/jpeg" });
             }}
             style={{ minHeight: 48, minWidth: 48, alignItems: "center", justifyContent: "center" }}
           >
-            <Text style={{ color: theme.primary, fontWeight: "700" }}>Photo</Text>
+            <Text style={{ color: ingesting ? theme.textMuted : theme.primary, fontWeight: "700" }}>Photo</Text>
           </Pressable>
           <Pressable
             accessibilityLabel="Joindre un PDF"
-            onPress={pickPdf}
+            onPress={() => { if (!ingesting) void pickPdf(); }}
             style={{ minHeight: 48, minWidth: 48, alignItems: "center", justifyContent: "center" }}
           >
-            <Text style={{ color: theme.primary, fontWeight: "700" }}>PDF</Text>
+            <Text style={{ color: ingesting ? theme.textMuted : theme.primary, fontWeight: "700" }}>PDF</Text>
           </Pressable>
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder={course && isFreeChatCourse(course.id) ? "Pose ta question…" : "Pose une question sur le cours…"}
+            placeholder={course && isFreeChatCourse(course) ? "Joins ton PDF, ou pose ta question…" : "Pose une question sur le cours…"}
             placeholderTextColor={theme.textMuted}
             multiline
             style={{
