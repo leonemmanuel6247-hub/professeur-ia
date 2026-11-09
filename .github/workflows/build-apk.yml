@@ -1,0 +1,75 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+      - master
+
+jobs:
+  android-apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Expo prebuild Android
+        run: npx expo prebuild --platform android --non-interactive --clean
+        env:
+          EXPO_NO_TELEMETRY: 1
+          CI: 1
+
+      - name: Decode keystore if provided
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            {
+              echo "PROFESSEUR_UPLOAD_STORE_FILE=release.keystore"
+              echo "PROFESSEUR_UPLOAD_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+              echo "PROFESSEUR_UPLOAD_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+              echo "PROFESSEUR_UPLOAD_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
+            } >> android/gradle.properties
+          else
+            echo "Pas de keystore secret : APK signe avec le keystore debug Expo."
+          fi
+
+      - name: Assemble release APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: professeur-ia-apk
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

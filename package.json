@@ -1,0 +1,51 @@
+{
+  "name": "professeur-ia",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "web": "expo start --web",
+    "lint": "tsc --noEmit",
+    "prebuild": "expo prebuild --platform android --non-interactive"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~5.0.5",
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-navigation/bottom-tabs": "^7.3.10",
+    "@react-navigation/native": "^7.1.6",
+    "@react-navigation/native-stack": "^7.3.10",
+    "expo": "~53.0.11",
+    "expo-asset": "~11.1.5",
+    "expo-build-properties": "~0.14.6",
+    "expo-clipboard": "~7.1.4",
+    "expo-constants": "~17.1.6",
+    "expo-crypto": "~14.1.4",
+    "expo-document-picker": "~13.1.5",
+    "expo-file-system": "~18.1.10",
+    "expo-image-picker": "~16.1.4",
+    "expo-secure-store": "~14.2.3",
+    "expo-sharing": "~13.1.5",
+    "expo-splash-screen": "~0.30.8",
+    "expo-sqlite": "~15.2.10",
+    "expo-status-bar": "~2.2.3",
+    "katex": "^0.16.11",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.2",
+    "react-native-gesture-handler": "~2.24.0",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.10.0",
+    "react-native-svg": "15.11.2",
+    "react-native-web": "^0.20.0",
+    "react-native-webview": "13.13.5",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@types/katex": "^0.16.8",
+    "@types/react": "~19.0.10",
+    "typescript": "~5.8.3"
+  },
+  "private": true
+}
