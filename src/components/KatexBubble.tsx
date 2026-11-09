@@ -8,7 +8,7 @@ export function KatexBubble({ content }: { content: string }) {
   const theme = useAppStore((s) => s.theme);
   const { width } = useWindowDimensions();
   const html = useMemo(() => buildMessageHtml(content, theme), [content, theme]);
-  const [h, setH] = useState(140);
+  const [h, setH] = useState(80);
   return (
     <WebView
       originWhitelist={["*"]}
@@ -19,9 +19,9 @@ export function KatexBubble({ content }: { content: string }) {
       onShouldStartLoadWithRequest={(r) => r.url.startsWith("about:") || r.url.startsWith("data:")}
       onMessage={(e) => {
         const n = Number(e.nativeEvent.data);
-        if (n > 40 && n < 8000) setH(n);
+        if (n > 40 && n < 30000) setH(n + 8);
       }}
-      style={{ width: Math.min(width * 0.9, 720), height: h, backgroundColor: "transparent" }}
+      style={{ width: Math.min(width * 0.86, 680), height: h, backgroundColor: "transparent" }}
     />
   );
 }

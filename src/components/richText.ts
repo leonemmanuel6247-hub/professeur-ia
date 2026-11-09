@@ -113,15 +113,15 @@ export function markdownToHtml(md: string): string {
   return html;
 }
 
-export function buildMessageHtml(content: string, theme: ThemeColors): string {
+export function buildMessageHtml(content: string, theme: ThemeColors, bubbleId = ""): string {
   const body = markdownToHtml(content);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:;"/>
 <style>${KATEX_CSS}</style>
 <style>
-html,body{margin:0;padding:0;background:transparent}
-body{padding:2px 4px;color:${theme.text};font-family:system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.5;word-wrap:break-word}
+html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+body{padding:4px 6px 12px;color:${theme.text};font-family:system-ui,-apple-system,sans-serif;font-size:16px;line-height:1.65;word-wrap:break-word}
 h1,h2,h3,h4{margin:12px 0 6px;line-height:1.25}
 h1{font-size:20px}h2{font-size:18px}h3{font-size:16px}h4{font-size:15px}
 p{margin:6px 0}
@@ -145,7 +145,7 @@ a{pointer-events:none;color:${theme.primary}}
     try{
       var h=document.documentElement.scrollHeight;
       if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(String(h)); }
-      else if(window.parent){ window.parent.postMessage({__katexH:h}, "*"); }
+      else if(window.parent){ window.parent.postMessage({__katexH:h,__katexId:${JSON.stringify(bubbleId)}}, "*"); }
     }catch(e){}
   }
   send(); setTimeout(send, 80); setTimeout(send, 400);

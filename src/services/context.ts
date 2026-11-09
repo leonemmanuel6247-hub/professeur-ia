@@ -49,14 +49,16 @@ export async function buildProfessorMessages(opts: {
   const bonus = opts.horsCours
     ? "Les bonus [HORS COURS] sont autorises, toujours etiquetes."
     : "N'ajoute AUCUN contenu hors cours.";
+  const schemaRule =
+    "SCHEMA: si tu dessines, INTERDIT de decrire la figure en texte. Apres le texte pedagogique, un bloc ```json court PUIS un bloc ```html avec un VRAI <svg> ou <canvas> (line/circle/path/rect). Un HTML sans svg/canvas est refuse.";
 
-  let history = [...opts.history];
-  const replyBudget = Math.min(4096, Math.floor(opts.maxContext * 0.25));
-  const systemBase = fill(passages) + "\n" + bonus + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "");
+  let history = compressHistory(opts.history);
+  const replyBudget = Math.min(4096, Math.floor(opts.maxContext * 0.3));
+  const systemBase = fill(passages) + "\n" + bonus + "\n" + schemaRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "");
 
   const pack = () => {
     const msgs: LlmMessage[] = [
-      { role: "system", content: fill(passages) + "\n" + bonus + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "") },
+      { role: "system", content: fill(passages) + "\n" + bonus + "\n" + schemaRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "") },
       ...history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
       { role: "user", content: opts.userText },
     ];
@@ -67,7 +69,7 @@ export async function buildProfessorMessages(opts: {
   let packed = pack();
 
   while (packed.tokens + replyBudget > opts.maxContext && history.length > 2) {
-    const keepRecent = 4;
+    const keepRecent = 2;
     if (history.length <= keepRecent) break;
     const dropped = history.slice(0, history.length - keepRecent);
     const recent = history.slice(-keepRecent);
@@ -77,12 +79,12 @@ export async function buildProfessorMessages(opts: {
       : "";
     const lines = dropped
       .filter((d) => d !== prevSummary)
-      .map((d) => `${d.role === "user" ? "Eleve" : "Prof"}: ${d.content.replace(/\s+/g, " ").slice(0, 160)}`);
+      .map((d) => `${d.role === "user" ? "Eleve" : "Prof"}: ${compactText(d.content, 120)}`);
     const merged = [...(body ? [body] : []), ...lines].join(" ; ");
     history = [
       {
         role: "assistant",
-        content: `[resume des echanges precedents] ${merged.slice(0, 900)}`,
+        content: `[resume des echanges precedents] ${merged.slice(0, 700)}`,
       },
       ...recent,
     ];
@@ -109,8 +111,65 @@ export async function buildProfessorMessages(opts: {
 export function extractSchemaBlocks(text: string): { spec: string | null; html: string | null } {
   const json = text.match(/```json\s*([\s\S]*?)```/i);
   const html = text.match(/```html\s*([\s\S]*?)```/i);
+  let spec = json ? json[1].trim() : null;
+  if (!spec) {
+    const bare = text.match(/\{\s*"titre"[\s\S]*?"objets"\s*:\s*\[[\s\S]*?\][\s\S]*?\}/);
+    if (bare) spec = bare[0].trim();
+  }
   return {
-    spec: json ? json[1].trim() : null,
+    spec,
     html: html ? html[1].trim() : null,
   };
+}
+
+export function stripSchemaFromText(text: string): string {
+  let t = text || "";
+  t = t.replace(/```json\s*[\s\S]*?```/gi, "");
+  t = t.replace(/```html\s*[\s\S]*?```/gi, "");
+  t = t.replace(/```[a-z]*\s*[\s\S]*?```/gi, (block) => {
+    const inner = block.replace(/^```[a-z]*/i, "").replace(/```$/, "").trim();
+    if (/^\{[\s\S]*"objets"\s*:/.test(inner) || /"titre"\s*:[\s\S]*"objets"\s*:/.test(inner)) {
+      return "";
+    }
+    return block;
+  });
+  t = t.replace(/\{[\s\S]*?"objets"\s*:\s*\[[\s\S]*?\]\s*,[\s\S]*?\}\s*\}?/g, (m) => {
+    const trimmed = m.trim();
+    if (/"titre"\s*:/.test(trimmed) || /"objets"\s*:/.test(trimmed)) return "";
+    return m;
+  });
+  t = t.replace(/\{\s*"titre"[\s\S]*?"objets"[\s\S]*?\}\s*\}?/g, "").trim();
+  return t.trim();
+}
+
+function compactText(text: string, max = 280): string {
+  const clean = stripSchemaFromText(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, max - 1) + "…";
+}
+
+export function compressHistory(
+  history: { role: "user" | "assistant"; content: string }[]
+): { role: "user" | "assistant"; content: string }[] {
+  const cleaned = history
+    .filter((h) => h.role === "user" || h.role === "assistant")
+    .map((h) => ({
+      role: h.role,
+      content: h.role === "assistant" ? compactText(h.content, 900) : compactText(h.content, 500),
+    }))
+    .filter((h) => h.content.length > 0);
+
+  if (cleaned.length <= 6) return cleaned;
+  const dropped = cleaned.slice(0, cleaned.length - 4);
+  const recent = cleaned.slice(-4);
+  const lines = dropped.map((d) => `${d.role === "user" ? "Eleve" : "Prof"}: ${compactText(d.content, 140)}`);
+  return [
+    {
+      role: "assistant",
+      content: `[resume des echanges precedents] ${lines.join(" ; ").slice(0, 800)}`,
+    },
+    ...recent,
+  ];
 }

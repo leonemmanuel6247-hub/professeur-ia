@@ -3,7 +3,7 @@ import { AppSettings } from "../types";
 import { DEFAULT_PROMPTS } from "../prompts/defaults";
 
 const DEFAULTS: AppSettings = {
-  theme: "system",
+  theme: "dark",
   fontScale: 1,
   horsCoursEnabled: true,
   prompts: { ...DEFAULT_PROMPTS },

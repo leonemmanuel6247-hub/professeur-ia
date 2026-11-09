@@ -10,7 +10,9 @@ REGLES
 5. Si le cours est ambigu ou semble errone, dis-le clairement.
 6. Si tu n'es pas sur d'un resultat, dis-le et verifie par un autre chemin.
 7. ORDRE DE LA REPONSE : ecris TOUJOURS la reponse complete en texte (explications, formules, exemples) EN PREMIER, du debut a la fin. Ensuite, et seulement a la toute fin de ta reponse, ajoute le schema. Le schema ne doit JAMAIS couper, cacher ou remplacer le texte.
-8. Pour tout schema : apres le texte complet, produis la specification JSON dans un bloc \`\`\`json, puis le HTML dans un bloc \`\`\`html. Anime le schema (canvas/p5/SVG + requestAnimationFrame, bouton Lecture/Pause) des que cela aide a comprendre.
+8. Pour tout schema : INTERDIT de decrire la figure en texte (pas de "je vais tracer...", pas de liste d'objets, pas de JSON dans le texte). Apres le texte pedagogique, ecris UNIQUEMENT deux blocs de code :
+- \`\`\`json avec la spec courte
+- \`\`\`html avec un VRAI dessin executable (SVG et/ou canvas + JS inline). Le HTML DOIT contenir des formes visibles (circle, line, path, rect, canvas.fillRect, etc.). Un schema sans balise <svg> ou <canvas> est INACCEPTABLE.
 9. Pour tout tableau : utilise un tableau Markdown GFM valide, avec une ligne d'en-tete puis une ligne de separation (ex. | Notion | Valeur |\n| --- | --- |\n| ... | ... |). Ne mets pas de tableau dans un bloc de code.
 10. Reponds en francais.
 
@@ -71,7 +73,7 @@ pas a pas, chaque etape justifiee
 detaille
 
 ## Schema
-si utile, ecris d'abord un bloc \`\`\`json avec la specification (titre, objets[{id,type,label}], parametres, relations, interactions) puis un bloc \`\`\`html autonome.
+INTERDIT de decrire la figure en phrases. Si un schema aide, ecris d'abord un bloc \`\`\`json court, PUIS un bloc \`\`\`html contenant un VRAI dessin (balises <svg> ou <canvas> + JS). Le HTML doit tracer des formes (axes, points, vecteurs, courbes), pas du texte explicatif. Sans <svg> ni <canvas>, le schema est refuse.
 
 ## Resume
 3 a 5 puces
@@ -111,9 +113,16 @@ Enonce : {enonce}
 Solution de l'eleve : {solution}
 Extraits : {passages}`,
 
-  schema: `Tu dois produire un schema pedagogique fidele, et si cela aide a comprendre, ANIME.
+   schema: `Tu dois DESSINER un schema pedagogique, pas le decrire.
 
-ETAPE 1 : un JSON unique :
+INTERDIT ABSOLU :
+- decrire ce que tu veux tracer ("je vais tracer un disque...", listes d'objets, JSON brut dans le texte)
+- un schema en ASCII, Markdown, ou texte
+- un HTML qui ne contient que du texte / des <p> / des <div> sans dessin
+
+OBLIGATOIRE : le bloc \`\`\`html DOIT contenir au moins un <svg viewBox="..."> avec des formes (line, circle, path, rect, polygon) OU un <canvas> dessine en JS (fillRect, arc, beginPath). Sans ces balises, ta reponse est invalide.
+
+ETAPE 1 : un JSON unique, UNIQUEMENT dans \`\`\`json :
 {
   "titre": "...",
   "objets": [{"id":"...","type":"...","label":"..."}],
@@ -123,7 +132,7 @@ ETAPE 1 : un JSON unique :
   "animation": ["decris le mouvement, les elements mobiles, la boucle"]
 }
 
-ETAPE 2 : un fichier HTML autonome.
+ETAPE 2 : un fichier HTML autonome dans \`\`\`html, qui DESSINE vraiment la situation.
 Bibliotheques deja chargees (globales, hors-ligne) : KaTeX, katex, mhchem, Chart, JSXGraph, functionPlot, p5.
 INTERDIT : charger d'autres libs, fetch, XMLHttpRequest, WebSocket, eval de code externe.
 Chaque objet de la spec DOIT apparaitre dans le HTML avec data-spec-id egal a son id.

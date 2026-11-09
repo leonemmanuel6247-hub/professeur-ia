@@ -9,8 +9,17 @@ export function SplashOverlay({ onDone }: { onDone: () => void }) {
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
   const hue = useRef(new Animated.Value(0)).current;
+  const doneRef = useRef(false);
+
+  const finish = React.useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onDone();
+  }, [onDone]);
 
   useEffect(() => {
+    const safety = setTimeout(finish, 6000);
+
     Animated.parallel([
       Animated.loop(
         Animated.timing(ring1, { toValue: 1, duration: 2400, easing: Easing.out(Easing.cubic), useNativeDriver: true })
@@ -34,8 +43,10 @@ export function SplashOverlay({ onDone }: { onDone: () => void }) {
       ]),
       Animated.delay(3000),
       Animated.timing(fade, { toValue: 0, duration: 650, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]).start(() => onDone());
-  }, [fade, titleOpacity, titleY, ring1, ring2, hue]);
+    ]).start(() => finish());
+
+    return () => clearTimeout(safety);
+  }, [fade, titleOpacity, titleY, ring1, ring2, hue, finish]);
 
   const ringStyle = (v: Animated.Value, c: string) => ({
     position: "absolute" as const,

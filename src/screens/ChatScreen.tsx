@@ -28,7 +28,7 @@ import {
   listConversations,
   listMessages,
 } from "../services/conversations";
-import { buildProfessorMessages, extractSchemaBlocks } from "../services/context";
+import { buildProfessorMessages, extractSchemaBlocks, stripSchemaFromText } from "../services/context";
 import { chatWithFallback } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { uid, logError } from "../db/database";
@@ -110,6 +110,7 @@ export function ChatScreen() {
     }
     const userText = text.trim();
     if (!userText && !imageUri) return;
+    if (streaming) return;
     try {
       const n = await countChunks(course.id);
       if (n === 0) {
@@ -140,7 +141,7 @@ export function ChatScreen() {
     try {
       const history = [...messages, um]
         .filter((x) => x.role !== "system")
-        .slice(-40)
+        .slice(-12)
         .map((x) => ({ role: x.role as "user" | "assistant", content: x.content }));
       const tpl =
         params.mode === "lesson"
@@ -175,6 +176,7 @@ export function ChatScreen() {
       const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
       const res = await chatWithFallback(ordered, built, {
         abortSignal: ac.signal,
+        maxTokens: Math.min(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.25)),
         onToken: (chunk) => {
           setMessages((ms) =>
             ms.map((x) => (x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x))
@@ -269,7 +271,7 @@ export function ChatScreen() {
           ref={listRef}
           data={messages}
           keyExtractor={(m) => m.id}
-          contentContainerStyle={{ padding: 12, paddingBottom: 24 }}
+          contentContainerStyle={{ padding: 12, paddingBottom: 32, gap: 4 }}
           onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => (
             <Bubble
@@ -288,7 +290,12 @@ export function ChatScreen() {
               onPress={() =>
                 a === "Suivant"
                   ? goToSection(currentIdx + 1)
-                  : send(a)
+                  : a === "Montre-moi un schema"
+                    ? send(
+                        "Montre-moi un schema.",
+                        "GENERE UN VRAI SCHEMA DESSINE. INTERDIT de decrire la figure en texte. Apres une phrase d'intro, ecris un bloc ```json court puis un bloc ```html contenant OBLIGATOIREMENT un <svg> ou un <canvas> avec des formes (axes, points, vecteurs, courbes). Un HTML sans svg/canvas est refuse."
+                      )
+                    : send(a)
               }
             />
           ))}
@@ -358,6 +365,8 @@ export function ChatScreen() {
 function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
   const theme = useAppStore((s) => s.theme);
   const mine = msg.role === "user";
+  const [schemaOpen, setSchemaOpen] = React.useState(false);
+  const [schemaHidden, setSchemaHidden] = React.useState(false);
   const schema = React.useMemo(() => {
     if (mine) return null;
     const blocks = extractSchemaBlocks(msg.content || "");
@@ -365,10 +374,7 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
   }, [msg.content, mine]);
   const textContent = React.useMemo(() => {
     if (mine) return msg.content || "";
-    let t = msg.content || "";
-    t = t.replace(/```json\s*[\s\S]*?```/gi, "");
-    t = t.replace(/```html\s*[\s\S]*?```/gi, "");
-    return t.trim();
+    return stripSchemaFromText(msg.content || "");
   }, [msg.content, mine]);
   return (
     <Pressable
@@ -376,10 +382,10 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
       style={{
         alignSelf: mine ? "flex-end" : "flex-start",
         backgroundColor: mine ? theme.bubbleUser : theme.bubbleAi,
-        padding: 12,
+        padding: 14,
         borderRadius: 16,
-        marginVertical: 6,
-        maxWidth: schema ? "96%" : "92%",
+        marginVertical: 10,
+        maxWidth: "94%",
         borderWidth: mine ? 0 : 1,
         borderColor: theme.border,
       }}
@@ -389,37 +395,75 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
       ) : (
         <>
           {textContent ? <KatexBubble content={textContent} /> : null}
-          {schema ? (
+          {schema && !schemaHidden ? (
             <View style={{ marginTop: 12 }}>
-              <Text
-                style={{
-                  color: theme.textMuted,
-                  fontSize: 11,
-                  fontWeight: "700",
-                  letterSpacing: 1,
-                  textTransform: "uppercase",
-                  marginBottom: 6,
-                }}
-              >
-                Schema (appuie sur "Plein ecran" pour l'agrandir)
-              </Text>
-              <View
-                style={{
-                  height: 460,
-                  borderRadius: 14,
-                  overflow: "hidden",
-                  borderWidth: 1,
-                  borderColor: theme.primary,
-                  backgroundColor: theme.bg,
-                  shadowColor: theme.primary,
-                  shadowOpacity: 0.35,
-                  shadowRadius: 12,
-                  shadowOffset: { width: 0, height: 0 },
-                  elevation: 6,
-                }}
-              >
-                <ExperienceWeb html={schema} spec={null} />
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                <Pressable
+                  onPress={() => setSchemaOpen((v) => !v)}
+                  style={{
+                    flex: 1,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    borderWidth: 1,
+                    borderColor: theme.primary,
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    backgroundColor: theme.surface,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: theme.primary,
+                      fontSize: 13,
+                      fontWeight: "700",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    {schemaOpen ? "Masquer le schema" : "Afficher le schema"}
+                  </Text>
+                  <Text style={{ color: theme.primary, fontSize: 14, fontWeight: "700" }}>
+                    {schemaOpen ? "\u25B2" : "\u25BC"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setSchemaOpen(false);
+                    setSchemaHidden(true);
+                  }}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: theme.danger || theme.border,
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    backgroundColor: theme.surface,
+                  }}
+                >
+                  <Text style={{ color: theme.text, fontSize: 13, fontWeight: "700" }}>Fermer</Text>
+                </Pressable>
               </View>
+              {schemaOpen ? (
+                <View
+                  style={{
+                    height: 460,
+                    marginTop: 8,
+                    borderRadius: 14,
+                    overflow: "hidden",
+                    borderWidth: 1,
+                    borderColor: theme.primary,
+                    backgroundColor: theme.bg,
+                    shadowColor: theme.primary,
+                    shadowOpacity: 0.35,
+                    shadowRadius: 12,
+                    shadowOffset: { width: 0, height: 0 },
+                    elevation: 6,
+                  }}
+                >
+                  <ExperienceWeb html={schema} spec={null} />
+                </View>
+              ) : null}
             </View>
           ) : null}
         </>

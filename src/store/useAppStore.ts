@@ -38,7 +38,7 @@ function resolveTheme(mode: AppSettings["theme"]): { isDark: boolean; theme: The
 export const useAppStore = create<AppState>((set, get) => ({
   ready: false,
   settings: {
-    theme: "system",
+    theme: "dark",
     fontScale: 1,
     horsCoursEnabled: true,
     prompts: {},
@@ -46,8 +46,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     documentsProviderId: "",
     schemasProviderId: "",
   },
-  theme: colors.light,
-  isDark: false,
+  theme: colors.dark,
+  isDark: true,
   courses: [],
   profiles: [],
   activeCourseId: null,
@@ -64,7 +64,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ ready: true, settings, isDark, theme, courses, profiles });
     } catch (e) {
       console.warn("init failed", e);
-      const { isDark, theme } = resolveTheme("system");
+      const { isDark, theme } = resolveTheme("dark");
       set({ ready: true, isDark, theme });
     }
   },
