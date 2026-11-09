@@ -30,8 +30,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Android SDK (préinstallé sur ubuntu-latest)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" || true
+          yes | sdkmanager --licenses || true
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
