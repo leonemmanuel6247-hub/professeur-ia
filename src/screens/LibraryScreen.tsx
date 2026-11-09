@@ -3,7 +3,7 @@ import { Alert, FlatList, Pressable, Text, View } from "react-native";
 import { NavigationProp, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useAppStore } from "../store/useAppStore";
 import { Badge, Btn, Card, Empty, H1, P, ProgressBar, Screen } from "../components/ui";
-import { deleteCourse } from "../services/courses";
+import { deleteCourse, isFreeChatCourse } from "../services/courses";
 import { Course } from "../types";
 import { RootStackParamList } from "../navigation";
 import { go } from "../nav";
@@ -15,6 +15,10 @@ export function LibraryScreen() {
   const refresh = useAppStore((s) => s.refresh);
   const setActive = useAppStore((s) => s.setActiveCourse);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
+  const visibleCourses = React.useMemo(
+    () => courses.filter((c) => !isFreeChatCourse(c.id)),
+    [courses]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -45,7 +49,7 @@ export function LibraryScreen() {
             <View style={{ height: 10 }} />
             <H1>Bibliotheque</H1>
             <Text style={{ color: theme.textMuted, marginTop: 4, fontSize: 14 }}>
-              {courses.length} cours · stockes sur l'appareil
+              {visibleCourses.length} cours · stockes sur l'appareil
             </Text>
           </View>
         </View>
@@ -55,7 +59,7 @@ export function LibraryScreen() {
         </View>
 
         <FlatList
-          data={courses}
+          data={visibleCourses}
           keyExtractor={(c) => c.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 40 }}

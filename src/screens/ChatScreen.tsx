@@ -13,6 +13,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NavigationProp } from "@react-navigation/native";
 import { go } from "../nav";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import * as Clipboard from "expo-clipboard";
 import { useAppStore } from "../store/useAppStore";
 import { Btn, Chip, Screen } from "../components/ui";
@@ -21,7 +22,7 @@ import { KatexBubble } from "../components/KatexBubble";
 import { ExperienceWeb } from "../components/ExperienceWeb";
 import { RootStackParamList } from "../navigation";
 import { ChatMessage, Course, SchemaSpec } from "../types";
-import { countChunks, getCourse, parsePlan, saveExperience, saveLesson, updateCourse, listLessons } from "../services/courses";
+import { countChunks, getCourse, parsePlan, saveExperience, saveLesson, updateCourse, listLessons, ensureFreeChatCourse, isFreeChatCourse } from "../services/courses";
 import {
   addMessage,
   createConversation,
@@ -32,8 +33,10 @@ import { buildProfessorMessages, extractSchemaBlocks, stripSchemaFromText } from
 import { chatWithFallback } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { uid, logError } from "../db/database";
-import { guessMime, readAsBase64 } from "../services/pdf";
+import { guessMime, readAsBase64, fileSize } from "../services/pdf";
 import { LlmMessage } from "../llm/types";
+
+type Attachment = { uri: string; mimeType: string; kind: "image" | "file"; fileName?: string };
 
 const ACTIONS = ["Plus simple", "Plus detaille", "Un autre exemple", "Pourquoi ?", "Montre-moi un schema", "Suivant"];
 
@@ -46,6 +49,8 @@ export function ChatScreen() {
   const setStreaming = useAppStore((s) => s.setStreaming);
   const streaming = useAppStore((s) => s.streaming);
   const setExp = useAppStore((s) => s.setActiveExperience);
+  const setActiveCourse = useAppStore((s) => s.setActiveCourse);
+  const refresh = useAppStore((s) => s.refresh);
   const route = useRoute();
   const params = ((route.params || {}) as RootStackParamList["Chat"]);
   const courseId = params.courseId || storeCourseId || "";
@@ -99,7 +104,7 @@ export function ChatScreen() {
     })();
   }, [courseId, params.conversationId, params.sectionId]);
 
-  const send = async (text: string, extra?: string, imageUri?: string) => {
+  const send = async (text: string, extra?: string, attachment?: Attachment) => {
     if (!course || !convId) {
       Alert.alert("Pas de cours", "Ouvre d'abord un cours depuis la bibliotheque.");
       return;
@@ -109,21 +114,24 @@ export function ChatScreen() {
       return;
     }
     const userText = text.trim();
-    if (!userText && !imageUri) return;
+    if (!userText && !attachment) return;
     if (streaming) return;
-    try {
-      const n = await countChunks(course.id);
-      if (n === 0) {
-        Alert.alert(
-          "Cours vide",
-          "Ce cours ne contient aucun extrait de texte. Reimporte le document (PDF ou photos) depuis Importer, puis rouvre la lecon."
-        );
+    if (!isFreeChatCourse(course.id)) {
+      try {
+        const n = await countChunks(course.id);
+        if (n === 0) {
+          Alert.alert(
+            "Cours vide",
+            "Ce cours ne contient aucun extrait de texte. Reimporte le document (PDF ou photos) depuis Importer, puis rouvre la lecon."
+          );
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
     }
     setInput("");
-    const um = await addMessage({ conversationId: convId, role: "user", content: userText, tokens: 0 });
+    const joinedLabel = attachment?.kind === "file" ? "(PDF joint)" : "(image jointe)";
+    const um = await addMessage({ conversationId: convId, role: "user", content: userText || joinedLabel, tokens: 0 });
     setMessages((m) => [...m, um]);
     const assistantId = await uid("msg");
     const placeholder: ChatMessage = {
@@ -147,31 +155,54 @@ export function ChatScreen() {
         params.mode === "lesson"
           ? settings.prompts.lecon || settings.prompts.professeur
           : settings.prompts.professeur;
+      const freeNote = isFreeChatCourse(course.id)
+        ? "MODE DISCUSSION LIBRE : aucun cours n'est charge. Si l'eleve a joint un document, appuie-toi dessus ; sinon reponds normalement comme professeur de sciences."
+        : "";
+      const mergedExtra = [extra, freeNote].filter(Boolean).join("\n") || undefined;
       const activeProfile =
         profiles.find((p) => p.id === settings.defaultProviderId) || profiles[0];
       let built = await buildProfessorMessages({
         systemTpl: tpl,
         course,
-        userText: userText || "(image jointe)",
+        userText: userText || joinedLabel,
         history,
         maxContext: Math.max(4096, activeProfile?.maxContext || 128000),
         horsCours: settings.horsCoursEnabled,
-        extraInstruction: extra,
+        extraInstruction: mergedExtra,
       });
-      if (imageUri) {
-        const b64 = await readAsBase64(imageUri);
-        const mime = await guessMime(imageUri, "image/jpeg");
-        built = built.map((msg, idx) =>
-          idx === built.length - 1
-            ? {
-                role: "user" as const,
-                content: [
-                  { type: "text" as const, text: userText || "Transcris et resous cet exercice dans le cadre du cours." },
-                  { type: "image_url" as const, image_url: { url: `data:${mime};base64,${b64}` } },
-                ],
-              }
-            : msg
-        ) as LlmMessage[];
+      if (attachment) {
+        const b64 = await readAsBase64(attachment.uri);
+        if (attachment.kind === "file") {
+          built = built.map((msg, idx) =>
+            idx === built.length - 1
+              ? {
+                  role: "user" as const,
+                  content: [
+                    { type: "text" as const, text: userText || "Voici le PDF. Lis-le puis reponds en professeur a mes questions." },
+                    {
+                      type: "file" as const,
+                      mimeType: attachment.mimeType,
+                      dataBase64: b64,
+                      fileName: attachment.fileName ?? "document.pdf",
+                    },
+                  ],
+                }
+              : msg
+          ) as LlmMessage[];
+        } else {
+          const mime = await guessMime(attachment.uri, attachment.mimeType || "image/jpeg");
+          built = built.map((msg, idx) =>
+            idx === built.length - 1
+              ? {
+                  role: "user" as const,
+                  content: [
+                    { type: "text" as const, text: userText || "Transcris et resous cet exercice dans le cadre du cours." },
+                    { type: "image_url" as const, image_url: { url: `data:${mime};base64,${b64}` } },
+                  ],
+                }
+              : msg
+          ) as LlmMessage[];
+        }
       }
       const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
       const res = await chatWithFallback(ordered, built, {
@@ -220,6 +251,42 @@ export function ChatScreen() {
     }
   };
 
+  const pickPdf = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.[0]) return;
+      const asset = res.assets[0];
+      try {
+        const size = await fileSize(asset.uri);
+        if (size > 35 * 1024 * 1024) {
+          Alert.alert("PDF trop grand", "Limite : 35 Mo.");
+          return;
+        }
+      } catch {
+        /* taille inconnue : on tente quand meme */
+      }
+      await send(input, undefined, {
+        uri: asset.uri,
+        mimeType: "application/pdf",
+        kind: "file",
+        fileName: asset.name || "document.pdf",
+      });
+    } catch (e) {
+      Alert.alert("PDF", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const continueWithoutCourse = async () => {
+    try {
+      const c = await ensureFreeChatCourse();
+      setActiveCourse(c.id);
+      await refresh();
+      nav.setParams({ courseId: c.id } as any);
+    } catch (e) {
+      Alert.alert("Erreur", e instanceof Error ? e.message : String(e));
+    }
+  };
+
   if (!courseId) {
     return (
       <Screen>
@@ -229,12 +296,13 @@ export function ChatScreen() {
             Professeur IA
           </Text>
           <Text style={{ color: theme.textMuted, fontSize: 14, marginTop: 10, textAlign: "center", lineHeight: 21 }}>
-            Choisis un cours pour discuter ou importe un PDF pour commencer.
+            Choisis un cours, importe un PDF, ou continue sans cours — tu pourras joindre ton PDF directement dans la conversation.
           </Text>
           <View style={{ flexDirection: "row", gap: 10, marginTop: 28 }}>
             <Btn title="Mes cours" variant="ghost" onPress={() => go(nav, "Library")} />
             <Btn title="+ Importer" onPress={() => go(nav, "Import")} />
           </View>
+          <Btn title="Continuer sans PDF" variant="accent" onPress={continueWithoutCourse} style={{ marginTop: 14, minWidth: 260 }} />
         </View>
       </Screen>
     );
@@ -317,16 +385,24 @@ export function ChatScreen() {
               const perm = await ImagePicker.requestCameraPermissionsAsync();
               if (!perm.granted) return;
               const shot = await ImagePicker.launchCameraAsync({ quality: 0.7 });
-              if (!shot.canceled && shot.assets[0]) send(input, undefined, shot.assets[0].uri);
+              if (!shot.canceled && shot.assets[0])
+                send(input, undefined, { uri: shot.assets[0].uri, mimeType: "image/jpeg", kind: "image" });
             }}
             style={{ minHeight: 48, minWidth: 48, alignItems: "center", justifyContent: "center" }}
           >
             <Text style={{ color: theme.primary, fontWeight: "700" }}>Photo</Text>
           </Pressable>
+          <Pressable
+            accessibilityLabel="Joindre un PDF"
+            onPress={pickPdf}
+            style={{ minHeight: 48, minWidth: 48, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ color: theme.primary, fontWeight: "700" }}>PDF</Text>
+          </Pressable>
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="Pose une question sur le cours…"
+            placeholder={course && isFreeChatCourse(course.id) ? "Pose ta question…" : "Pose une question sur le cours…"}
             placeholderTextColor={theme.textMuted}
             multiline
             style={{

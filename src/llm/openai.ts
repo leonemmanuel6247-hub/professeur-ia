@@ -7,19 +7,16 @@ import {
   estimateTokens,
 } from "./types";
 
-function partsToOpenAi(content: LlmMessage["content"], supportsNativePdf: boolean) {
+function partsToOpenAi(content: LlmMessage["content"]) {
   if (typeof content === "string") return content;
   return content.map((p) => {
     if (p.type === "text") return { type: "text", text: p.text };
     if (p.type === "image_url") return { type: "image_url", image_url: p.image_url };
     const dataUrl = `data:${p.mimeType};base64,${p.dataBase64}`;
-    if (supportsNativePdf) {
-      return {
-        type: "file",
-        file: { filename: p.fileName ?? "document.pdf", file_data: dataUrl },
-      };
-    }
-    return { type: "image_url", image_url: { url: dataUrl } };
+    return {
+      type: "file",
+      file: { filename: p.fileName ?? "document.pdf", file_data: dataUrl },
+    };
   });
 }
 
@@ -42,7 +39,7 @@ export class OpenAICompatProvider implements LlmProvider {
       max_tokens: options.maxTokens,
       messages: messages.map((m) => ({
         role: m.role,
-        content: partsToOpenAi(m.content, this.supportsNativePdf),
+        content: partsToOpenAi(m.content),
       })),
     };
 

@@ -408,3 +408,32 @@ export async function getExperience(id: string): Promise<ExperienceRow | null> {
     createdAt: Number(r.created_at),
   };
 }
+
+export const FREE_CHAT_COURSE_ID = "crs_discussion_libre";
+
+export function isFreeChatCourse(id?: string | null): boolean {
+  return !!id && id === FREE_CHAT_COURSE_ID;
+}
+
+export async function ensureFreeChatCourse(): Promise<Course> {
+  const existing = await getCourse(FREE_CHAT_COURSE_ID);
+  if (existing) return existing;
+  const db = await getDb();
+  const now = Date.now();
+  const identity = JSON.stringify({
+    notations: [],
+    definitions: [],
+    theorems: [],
+    formulas: [],
+    prerequisites: [],
+    restrictions: [],
+    summary:
+      "Discussion libre : aucun cours n'est charge. L'eleve enverra ses documents (PDF ou photos) directement dans la conversation. Reponds en professeur de sciences, comme d'habitude.",
+  });
+  await db.runAsync(
+    `INSERT OR IGNORE INTO courses (id, title, subject, level, school, created_at, progress, identity_json, plan_json, source_kind, source_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [FREE_CHAT_COURSE_ID, "Discussion libre", "Sans cours", "", "", now, 0, identity, "[]", "libre", "Sans PDF"]
+  );
+  return (await getCourse(FREE_CHAT_COURSE_ID))!;
+}

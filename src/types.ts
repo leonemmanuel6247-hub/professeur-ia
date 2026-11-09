@@ -27,7 +27,7 @@ export interface Course {
   progress: number;
   identityJson: string;
   planJson: string;
-  sourceKind: "pdf" | "images" | "camera";
+  sourceKind: "pdf" | "images" | "camera" | "libre";
   sourceName: string;
 }
 

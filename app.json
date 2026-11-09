@@ -2,7 +2,7 @@
   "expo": {
     "name": "Professeur IA",
     "slug": "professeur-ia",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -22,8 +22,13 @@
         "backgroundColor": "#040615"
       },
       "package": "com.leon.professeuria",
-      "versionCode": 2,
-      "permissions": ["CAMERA", "INTERNET", "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE"],
+      "versionCode": 3,
+      "permissions": [
+        "CAMERA",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE"
+      ],
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
