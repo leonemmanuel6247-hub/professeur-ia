@@ -5,8 +5,19 @@ import { OpenAICompatProvider } from "./openai";
 import { ChatOptions, ChatResult, LlmMessage, LlmProvider, ProviderError } from "./types";
 import { addTokens } from "../services/providers";
 
+function isLocalOpenAi(profile: AiProfile): boolean {
+  const u = (profile.baseUrl || "").toLowerCase();
+  return (
+    profile.type === "openai" &&
+    (/^https?:\/\/(127\.0\.0\.1|localhost|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?/i.test(u) ||
+      /8090/.test(u) ||
+      /nemapi/i.test(profile.name))
+  );
+}
+
 export async function buildProvider(profile: AiProfile): Promise<LlmProvider> {
-  const key = await getApiKey(profile.id);
+  const stored = await getApiKey(profile.id);
+  const key = stored || (isLocalOpenAi(profile) ? "nem" : "");
   if (!key) {
     throw new ProviderError("Aucune cle API pour ce profil. Ajoute-la dans Profils IA.", 401);
   }

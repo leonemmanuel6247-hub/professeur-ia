@@ -86,12 +86,31 @@ export function defaultBase(type: ProviderType): string {
     : "https://api.openai.com/v1";
 }
 
-export const PRESETS: { label: string; type: ProviderType; baseUrl: string; model: string }[] = [
+export const PRESETS: {
+  label: string;
+  type: ProviderType;
+  baseUrl: string;
+  model: string;
+  maxContext?: number;
+  supportsVision?: boolean;
+  supportsNativePdf?: boolean;
+  allowEmptyKey?: boolean;
+}[] = [
   { label: "OpenAI", type: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   { label: "OpenRouter", type: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini" },
   { label: "Groq", type: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
   { label: "NVIDIA NIM", type: "openai", baseUrl: "https://integrate.api.nvidia.com/v1", model: "meta/llama-3.1-70b-instruct" },
   { label: "Gemini", type: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash" },
+  {
+    label: "NemApiBridge",
+    type: "openai",
+    baseUrl: "http://127.0.0.1:8090/v1",
+    model: "DeepSeek",
+    maxContext: 32000,
+    supportsVision: true,
+    supportsNativePdf: false,
+    allowEmptyKey: true,
+  },
 ];
 
 export async function deleteProfile(id: string) {

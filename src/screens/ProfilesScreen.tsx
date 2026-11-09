@@ -46,9 +46,11 @@ export function ProfilesScreen() {
         type: p.type,
         baseUrl: p.baseUrl,
         model: p.model,
-        supportsNativePdf: p.type === "gemini",
-        supportsVision: true,
+        supportsNativePdf: p.supportsNativePdf ?? p.type === "gemini",
+        supportsVision: p.supportsVision ?? true,
+        maxContext: p.maxContext,
       });
+      if (p.allowEmptyKey) await saveApiKey(created.id, "nem");
       await open(created);
       await load();
       await refresh();
@@ -135,7 +137,8 @@ export function ProfilesScreen() {
         <P muted>Les cles ne quittent jamais le telephone, sauf vers le fournisseur choisi.</P>
         <P muted>
           Tu peux utiliser n'importe quel service compatible OpenAI (/chat/completions) ou Gemini,
-          meme s'il n'apparait pas ci-dessous.
+          meme s'il n'apparait pas ci-dessous. NemApiBridge : passerelle locale sur le telephone
+          (http://127.0.0.1:8090/v1, modele = nom du provider, ex. DeepSeek). Cle facultative.
         </P>
         <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
           {PRESETS.map((p) => (
@@ -209,6 +212,13 @@ export function ProfilesScreen() {
               ))}
             </View>
             <Field label="URL de base" value={edit.baseUrl} onChangeText={(t) => setEdit({ ...edit, baseUrl: t })} keyboardType="url" />
+            {/8090|nemapi/i.test(edit.name + edit.baseUrl) ? (
+              <P muted>
+                NemApiBridge doit tourner sur le telephone (Demarrer et ouvrir). Sur le meme
+                appareil : http://127.0.0.1:8090/v1. Depuis un PC/web : http://IP_DU_TELEPHONE:8090/v1.
+                Le champ Modele doit etre le nom du provider importe (ex. DeepSeek).
+              </P>
+            ) : null}
             <Field label="Modele" value={edit.model} onChangeText={(t) => setEdit({ ...edit, model: t })} />
             <Field
               label="Cle API"
