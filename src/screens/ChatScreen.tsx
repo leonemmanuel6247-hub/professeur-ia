@@ -364,9 +364,12 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
     return blocks.html;
   }, [msg.content, mine]);
   const textContent = React.useMemo(() => {
-    if (!schema) return msg.content;
-    return (msg.content || "").replace(/```html\s*[\s\S]*?```/i, "").trim();
-  }, [msg.content, schema]);
+    if (mine) return msg.content || "";
+    let t = msg.content || "";
+    t = t.replace(/```json\s*[\s\S]*?```/gi, "");
+    t = t.replace(/```html\s*[\s\S]*?```/gi, "");
+    return t.trim();
+  }, [msg.content, mine]);
   return (
     <Pressable
       onLongPress={onCopy}
@@ -387,8 +390,36 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
         <>
           {textContent ? <KatexBubble content={textContent} /> : null}
           {schema ? (
-            <View style={{ height: 360, marginTop: 8, borderRadius: 12, overflow: "hidden" }}>
-              <ExperienceWeb html={schema} spec={null} />
+            <View style={{ marginTop: 12 }}>
+              <Text
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 11,
+                  fontWeight: "700",
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
+                Schema (appuie sur "Plein ecran" pour l'agrandir)
+              </Text>
+              <View
+                style={{
+                  height: 460,
+                  borderRadius: 14,
+                  overflow: "hidden",
+                  borderWidth: 1,
+                  borderColor: theme.primary,
+                  backgroundColor: theme.bg,
+                  shadowColor: theme.primary,
+                  shadowOpacity: 0.35,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                  elevation: 6,
+                }}
+              >
+                <ExperienceWeb html={schema} spec={null} />
+              </View>
             </View>
           ) : null}
         </>

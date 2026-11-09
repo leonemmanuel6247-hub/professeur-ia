@@ -11,8 +11,8 @@ export const EXPERIENCE_SHELL = (bodyHtml: string, extraHead = "") => `<!DOCTYPE
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; media-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';"/>
 <title>Zone Experience</title>
 <style>
-html,body{margin:0;padding:0;background:#0B1C20;color:#E8F0EE;font-family:system-ui,sans-serif}
-#root{padding:8px}
+html,body{margin:0;padding:0;min-height:100%;background:#040615;color:#E8F0EE;font-family:system-ui,sans-serif}
+#root{padding:8px;min-height:100%;box-sizing:border-box}
 .err{color:#E76F51;padding:12px}
 ${KATEX_CSS}
 </style>

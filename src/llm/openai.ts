@@ -71,16 +71,14 @@ export class OpenAICompatProvider implements LlmProvider {
 
     const reader = res.body?.getReader();
     if (!reader) {
-      const json = (await res.json()) as {
-        choices?: { message?: { content?: string } }[];
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const text = json.choices?.[0]?.message?.content ?? "";
-      options.onToken?.(text);
+      const raw = await res.text().catch(() => "");
+      const parsed = parseOpenAiBody(raw);
+      if (!parsed) throw new ProviderError("Reponse fournisseur illisible.", 0, true);
+      options.onToken?.(parsed.text);
       return {
-        text,
-        promptTokens: json.usage?.prompt_tokens ?? estimateTokens(JSON.stringify(messages)),
-        completionTokens: json.usage?.completion_tokens ?? estimateTokens(text),
+        text: parsed.text,
+        promptTokens: parsed.promptTokens || estimateTokens(JSON.stringify(messages)),
+        completionTokens: parsed.completionTokens || estimateTokens(parsed.text),
       };
     }
 
@@ -127,6 +125,50 @@ export class OpenAICompatProvider implements LlmProvider {
       completionTokens: completionTokens || estimateTokens(text),
     };
   }
+}
+
+function parseOpenAiBody(raw: string): { text: string; promptTokens: number; completionTokens: number } | null {
+  if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("data:") && !trimmed.startsWith("event:")) {
+    try {
+      const json = JSON.parse(trimmed) as {
+        choices?: { message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      return {
+        text: json.choices?.[0]?.message?.content ?? "",
+        promptTokens: json.usage?.prompt_tokens ?? 0,
+        completionTokens: json.usage?.completion_tokens ?? 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+  let text = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("data:")) continue;
+    const data = t.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      const json = JSON.parse(data) as {
+        choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      const piece = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
+      if (piece) text += piece;
+      if (json.usage) {
+        promptTokens = json.usage.prompt_tokens ?? promptTokens;
+        completionTokens = json.usage.completion_tokens ?? completionTokens;
+      }
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return text || promptTokens || completionTokens ? { text, promptTokens, completionTokens } : null;
 }
 
 function humanError(status: number, body: string): string {
