@@ -124,7 +124,12 @@ export function ProfilesScreen() {
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(`${msg}${/fetch|network|Failed/i.test(msg) ? " (CORS/HTTPS possible depuis le navigateur)" : ""}`);
+      const local = /8090|127\.0\.0\.1|192\.168\.|nemapi/i.test(`${edit.baseUrl} ${edit.name} ${msg}`);
+      setError(
+        local
+          ? msg
+          : `${msg}${/fetch|network|Failed/i.test(msg) ? " (CORS/HTTPS possible depuis le navigateur)" : ""}`
+      );
     } finally {
       setTesting(false);
     }
@@ -214,9 +219,9 @@ export function ProfilesScreen() {
             <Field label="URL de base" value={edit.baseUrl} onChangeText={(t) => setEdit({ ...edit, baseUrl: t })} keyboardType="url" />
             {/8090|nemapi/i.test(edit.name + edit.baseUrl) ? (
               <P muted>
-                NemApiBridge doit tourner sur le telephone (Demarrer et ouvrir). Sur le meme
-                appareil : http://127.0.0.1:8090/v1. Depuis un PC/web : http://IP_DU_TELEPHONE:8090/v1.
-                Le champ Modele doit etre le nom du provider importe (ex. DeepSeek).
+                NemApiBridge : meme telephone = http://127.0.0.1:8090/v1. Autre telephone/PC =
+                http://IP_AFFICHEE_DANS_NEMAPIBRIDGE:8090/v1 (pas 127.0.0.1). HTTP autorise.
+                Modele = nom du provider (ex. DeepSeek). Rebuild APK requis pour le HTTP local.
               </P>
             ) : null}
             <Field label="Modele" value={edit.model} onChangeText={(t) => setEdit({ ...edit, model: t })} />

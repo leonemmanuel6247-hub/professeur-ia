@@ -22,8 +22,8 @@
         "backgroundColor": "#040615"
       },
       "package": "com.leon.professeuria",
-      "versionCode": 1,
-      "permissions": ["CAMERA", "INTERNET"],
+      "versionCode": 2,
+      "permissions": ["CAMERA", "INTERNET", "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE"],
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
@@ -46,6 +46,7 @@
         }
       ],
       "./plugins/withReleaseSigning.js",
+      "./plugins/withCleartext.js",
       [
         "expo-build-properties",
         {

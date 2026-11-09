@@ -34,10 +34,10 @@ export class OpenAICompatProvider implements LlmProvider {
   ) {}
 
   async chat(messages: LlmMessage[], options: ChatOptions = {}): Promise<ChatResult> {
-    const url = `${this.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const body = {
+    const url = `${normalizeOpenAiBase(this.baseUrl)}/chat/completions`;
+    const local = isLocalHttp(this.baseUrl);
+    const payload = {
       model: this.model,
-      stream: true,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens,
       messages: messages.map((m) => ({
@@ -46,21 +46,34 @@ export class OpenAICompatProvider implements LlmProvider {
       })),
     };
 
-    let res: Response;
-    try {
-      res = await fetch(url, {
+    const tryOnce = async (stream: boolean) => {
+      const res = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.apiKey || "nem"}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...payload, stream }),
         signal: options.abortSignal,
       });
+      return res;
+    };
+
+    let res: Response;
+    try {
+      res = await tryOnce(!local);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "reseau";
       if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
-      throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);
+      if (local) {
+        try {
+          res = await tryOnce(false);
+        } catch {
+          throw new ProviderError(localNetHint(this.baseUrl, msg), 0, true);
+        }
+      } else {
+        throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);
+      }
     }
 
     if (!res.ok) {
@@ -169,6 +182,29 @@ function parseOpenAiBody(raw: string): { text: string; promptTokens: number; com
     }
   }
   return text || promptTokens || completionTokens ? { text, promptTokens, completionTokens } : null;
+}
+
+function normalizeOpenAiBase(baseUrl: string): string {
+  let u = (baseUrl || "").trim().replace(/\/+$/, "");
+  if (u && !/\/v1$/i.test(u) && /8090|nemapi/i.test(u)) u += "/v1";
+  return u;
+}
+
+function isLocalHttp(baseUrl: string): boolean {
+  return /^http:\/\/(127\.0\.0\.1|localhost|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)/i.test(
+    baseUrl || ""
+  );
+}
+
+function localNetHint(baseUrl: string, raw: string): string {
+  const httpsPage = typeof location !== "undefined" && location.protocol === "https:";
+  if (httpsPage) {
+    return "NemApiBridge est en HTTP local. Le test depuis ce navigateur HTTPS est bloque. Utilise l'APK sur le telephone (127.0.0.1:8090) ou l'IP Wi-Fi du telephone depuis le meme reseau.";
+  }
+  if (/127\.0\.0\.1|localhost/i.test(baseUrl)) {
+    return "127.0.0.1 pointe vers CET appareil. NemApiBridge doit tourner ici, ou remplace l'URL par http://IP_DU_TELEPHONE:8090/v1.";
+  }
+  return `NemApiBridge injoignable (${raw}). Verifie : app Demarree, meme Wi-Fi, URL http://IP:8090/v1, DeepSeek au premier plan.`;
 }
 
 function humanError(status: number, body: string): string {
