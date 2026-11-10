@@ -117,7 +117,6 @@ export function buildMessageHtml(content: string, theme: ThemeColors, bubbleId =
   const body = markdownToHtml(content);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:;"/>
 <style>${KATEX_CSS}</style>
 <style>
 html,body{margin:0;padding:0;background:transparent;overflow:visible}
@@ -138,7 +137,7 @@ table{border-collapse:collapse;margin:8px 0;width:100%;display:block;overflow-x:
 th,td{border:1px solid ${theme.border};padding:6px 8px;font-size:14px;text-align:left}
 th{background:${theme.surfaceAlt};font-weight:700}
 a{pointer-events:none;color:${theme.primary}}
-</style></head><body>${body}
+</style></head><body style="color:${theme.text || "#F4F6FF"};background:transparent">${body}
 <script>
 (function(){
   var last=-1;

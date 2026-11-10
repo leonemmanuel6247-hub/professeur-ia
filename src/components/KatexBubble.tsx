@@ -33,11 +33,14 @@ export function KatexBubble({ content }: { content: string }) {
   return (
     <WebView
       originWhitelist={["*"]}
-      source={{ html }}
+      source={{ html, baseUrl: "about:blank" }}
       scrollEnabled={false}
       bounces={false}
       overScrollMode="never"
       javaScriptEnabled
+      domStorageEnabled
+      androidLayerType="hardware"
+      mixedContentMode="always"
       setSupportMultipleWindows={false}
       onShouldStartLoadWithRequest={(r) => r.url.startsWith("about:") || r.url.startsWith("data:")}
       injectedJavaScript={probe}
@@ -49,7 +52,7 @@ export function KatexBubble({ content }: { content: string }) {
         const n = Number(e.nativeEvent.data);
         applyHeight(n);
       }}
-      style={{ width: Math.min(width * 0.86, 680), height: h, backgroundColor: "transparent" }}
+      style={{ width: Math.min(width * 0.86, 680), height: h, backgroundColor: theme.bubbleAi || theme.bg }}
     />
   );
 }

@@ -284,15 +284,22 @@ export function compressHistory(
     }))
     .filter((h) => h.content.length > 0);
 
-  if (cleaned.length <= 6) return cleaned;
-  const dropped = cleaned.slice(0, cleaned.length - 4);
-  const recent = cleaned.slice(-4);
-  const lines = dropped.map((d) => `${d.role === "user" ? "Eleve" : "Prof"}: ${compactText(d.content, 140)}`);
-  return [
-    {
-      role: "assistant",
-      content: `[resume des echanges precedents] ${lines.join(" ; ").slice(0, 800)}`,
-    },
-    ...recent,
-  ];
+  let result: { role: "user" | "assistant"; content: string }[];
+  if (cleaned.length <= 6) {
+    result = cleaned;
+  } else {
+    const dropped = cleaned.slice(0, cleaned.length - 4);
+    const recent = cleaned.slice(-4);
+    const lines = dropped.map((d) => `${d.role === "user" ? "Eleve" : "Prof"}: ${compactText(d.content, 140)}`);
+    result = [
+      {
+        role: "assistant",
+        content: `[resume des echanges precedents] ${lines.join(" ; ").slice(0, 800)}`,
+      },
+      ...recent,
+    ];
+  }
+  // Beaucoup d'API exigent un historique qui commence par un message "user".
+  while (result.length && result[0].role !== "user") result.shift();
+  return result;
 }

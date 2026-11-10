@@ -99,10 +99,19 @@ export function ChatScreen() {
         if (convs[0]) cid = convs[0].id;
         else cid = (await createConversation(courseId, c?.title || "Lecon")).id;
       }
-      setConvId(cid!);
-      const loaded = await listMessages(cid!);
-      messagesRef.current = loaded;
-      setMessages(loaded);
+      // Changement de conversation : on repart de la base. Sinon, l'etat local
+      // reste la source de verite : on ne recharge PAS depuis la base, sinon on
+      // risque d'ecraser un message en cours (cause classique de messages qui
+      // disparaissent au 2e envoi).
+      const conversationChanged = cid !== convId;
+      // Ne jamais ecraser un message en cours d'envoi/generation.
+      const hasLocalContent = messagesRef.current.length > 0;
+      if (conversationChanged && (!streaming || !hasLocalContent)) {
+        setConvId(cid!);
+        const loaded = await listMessages(cid!);
+        messagesRef.current = loaded;
+        setMessages(loaded);
+      }
       if (params.mode === "lesson" && params.sectionId && c) {
         const plan = parsePlan(c.planJson);
         const section = findSection(plan, params.sectionId);
@@ -111,6 +120,7 @@ export function ChatScreen() {
         }
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, params.conversationId, params.sectionId]);
 
   const scrollToEnd = (animated = true) => {
@@ -266,19 +276,22 @@ export function ChatScreen() {
           scrollOnGrow();
         },
       });
+      const finalText = res.text && res.text.trim()
+        ? res.text
+        : "(Reponse vide recue du fournisseur. Verifie le modele et l'URL dans Profils IA.)";
       await addMessage({
         id: assistantId,
         conversationId: convId,
         role: "assistant",
-        content: res.text,
+        content: finalText,
         tokens: res.completionTokens,
       });
-      setMessages((ms) => ms.map((x) => (x.id === assistantId ? { ...x, content: res.text, tokens: res.completionTokens } : x)));
+      setMessages((ms) => ms.map((x) => (x.id === assistantId ? { ...x, content: finalText, tokens: res.completionTokens } : x)));
       messagesRef.current = messagesRef.current.map((x) =>
-        x.id === assistantId ? { ...x, content: res.text, tokens: res.completionTokens } : x
+        x.id === assistantId ? { ...x, content: finalText, tokens: res.completionTokens } : x
       );
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
-      const blocks = extractSchemaBlocks(res.text);
+      const blocks = extractSchemaBlocks(finalText);
       if (blocks.spec || blocks.html) {
         await maybeSaveSchema(course.id, blocks.spec, blocks.html, setExp);
       }
@@ -287,7 +300,7 @@ export function ChatScreen() {
           id: `${course.id}_${params.sectionId}`,
           courseId: course.id,
           sectionId: params.sectionId,
-          content: res.text,
+          content: finalText,
           status: "seen",
         });
         const lessons = await listLessons(course.id);
