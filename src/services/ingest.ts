@@ -41,29 +41,81 @@ async function analyzeStructure(
   pages: { number: number; text: string }[],
   profiles: AiProfile[],
   promptTpl: string,
-  onToken?: (s: string) => void
-) {
-  const MAX_PAGES = 40;
-  const PER_PAGE = 900;
-  let sampled = pages;
-  if (pages.length > MAX_PAGES) {
-    const step = pages.length / MAX_PAGES;
-    sampled = Array.from({ length: MAX_PAGES }, (_, i) => pages[Math.floor(i * step)]);
+  onToken?: (s: string) => void,
+  onProgress?: IngestProgress
+): Promise<Record<string, unknown> | null> {
+  // On lit TOUT le document en troncons : chaque page est couverte, jamais
+  // echantillonnee au hasard. On decoupe en lots qui tiennent dans le contexte.
+  const PER_PAGE = 1800;
+  const PAGES_PER_LOT = 24;
+  const lots: { number: number; text: string }[][] = [];
+  for (let i = 0; i < pages.length; i += PAGES_PER_LOT) {
+    lots.push(pages.slice(i, i + PAGES_PER_LOT));
   }
-  const sample = sampled
-    .map((p) => `--- PAGE ${p.number} ---\n${p.text.slice(0, PER_PAGE)}`)
-    .join("\n\n");
-  const prompt = fillPrompt(promptTpl, {
-    pages: sample || "(document sans texte extractible)",
-    totalPages: String(pages.length),
-  });
-  const messages: LlmMessage[] = [
-    { role: "system", content: "Tu reponds uniquement en JSON valide." },
-    { role: "user", content: prompt },
-  ];
-  const res = await chatWithFallback(profiles, messages, { temperature: 0.1, onToken });
-  const json = extractJson(res.text);
-  return json;
+  if (!lots.length) lots.push([]);
+
+  let firstJson: Record<string, unknown> | null = null;
+  const sectionTitles: string[] = [];
+  const identity: Record<string, unknown> = {};
+
+  for (let li = 0; li < lots.length; li++) {
+    const lot = lots[li];
+    onProgress?.(
+      `Analyse du document ${li + 1}/${lots.length} (pages ${lot[0]?.number ?? 1}-${lot[lot.length - 1]?.number ?? 1})...`,
+      0.8 + 0.1 * (li / lots.length)
+    );
+    const sample = lot
+      .map((p) => `--- PAGE ${p.number} ---\n${p.text.slice(0, PER_PAGE)}`)
+      .join("\n\n");
+    const prompt = fillPrompt(promptTpl, {
+      pages: sample || "(document sans texte extractible)",
+      totalPages: String(pages.length),
+    });
+    const messages: LlmMessage[] = [
+      { role: "system", content: "Tu reponds uniquement en JSON valide." },
+      { role: "user", content: prompt },
+    ];
+    try {
+      const res = await chatWithFallback(profiles, messages, {
+        temperature: 0.1,
+        onToken: li === 0 ? onToken : undefined,
+      });
+      const json = extractJson(res.text);
+      if (!json) continue;
+      if (!firstJson) firstJson = json;
+      const id = (json.identity ?? {}) as Record<string, unknown>;
+      for (const k of Object.keys(id)) if (!identity[k]) identity[k] = id[k];
+      const plan = (json.plan as CoursePlanSection[]) || [];
+      for (const s of plan) if (s && s.title) sectionTitles.push(String(s.title));
+    } catch {
+      /* un lot qui echoue ne bloque pas les autres */
+    }
+  }
+
+  if (!firstJson) return null;
+  // Fusion : on garde l'identite/le plan du premier lot, enrichis par les titres
+  // de sections decouverts dans les lots suivants (couverture totale du document).
+  const mergedPlan: CoursePlanSection[] = Array.isArray(firstJson.plan)
+    ? (firstJson.plan as CoursePlanSection[]).slice()
+    : [];
+  const seen = new Set(mergedPlan.map((s) => String(s.title).toLowerCase()));
+  for (const t of sectionTitles) {
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lastEnd = mergedPlan.length ? mergedPlan[mergedPlan.length - 1].pageEnd : 0;
+    mergedPlan.push({
+      id: `s${mergedPlan.length + 1}`,
+      title: t,
+      pageStart: lastEnd + 1,
+      pageEnd: lastEnd + 1,
+    });
+  }
+  return {
+    ...firstJson,
+    identity: { ...((firstJson.identity as Record<string, unknown>) || {}), ...identity },
+    plan: mergedPlan.length ? mergedPlan : firstJson.plan,
+  };
 }
 
 export async function ingestPickedFiles(
@@ -332,7 +384,7 @@ async function analyzeAndUpdate(
 ): Promise<Course> {
   onProgress("Analyse structure (plan, notations)…", 0.8);
   try {
-    const json = await analyzeStructure(pages, profiles, promptTpl);
+    const json = await analyzeStructure(pages, profiles, promptTpl, undefined, onProgress);
     if (json) {
       const identity = json.identity ?? {};
       const plan = (json.plan as CoursePlanSection[]) || fallbackPlan(pages.length);

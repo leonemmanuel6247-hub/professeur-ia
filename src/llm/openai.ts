@@ -43,7 +43,8 @@ export class OpenAICompatProvider implements LlmProvider {
       })),
     };
 
-    const connectMs = local ? 30000 : 90000;
+    // Timeout tres long (10 min) : on laisse le fournisseur repondre, meme lentement.
+    const connectMs = 10 * 60 * 1000;
     const tryOnce = async (stream: boolean) => {
       const ctrl = new AbortController();
       let timedOut = false;
@@ -71,8 +72,8 @@ export class OpenAICompatProvider implements LlmProvider {
         if (timedOut) {
           throw new ProviderError(
             local
-              ? `Pas de reponse de NemApi en ${Math.round(connectMs / 1000)}s. Verifie que l'app est demarree, meme Wi-Fi, URL http://IP:8090/v1.`
-              : `Le fournisseur ne repond pas (${Math.round(connectMs / 1000)}s).`,
+              ? `Pas de reponse de NemApi en ${Math.round(connectMs / 60000)} min. Verifie que l'app est demarree, meme Wi-Fi, URL http://IP:8090/v1.`
+              : `Le fournisseur ne repond pas (${Math.round(connectMs / 60000)} min).`,
             0,
             true
           );
@@ -125,12 +126,50 @@ export class OpenAICompatProvider implements LlmProvider {
     }
 
     const decoder = new TextDecoder();
-    let buffer = "";
     let text = "";
     let promptTokens = 0;
     let completionTokens = 0;
-    const idleMs = local ? 30000 : 120000;
-    let lastData = Date.now();
+    const idleMs = 10 * 60 * 1000;
+
+    // On accumule TOUTES les donnees brutes. Selon le fournisseur, le corps peut
+    // etre du SSE (lignes "data: ...") OU un simple JSON (stream=false). On ne
+    // suppose rien : on assemble tout puis on decide a la fin.
+    let raw = "";
+    let lookedLikeSse: boolean | null = null;
+    let sseBuffer = "";
+    let sawDone = false;
+
+    const consumeSse = (final = false) => {
+      const lines = (sseBuffer + (final ? "\n" : "")).split("\n");
+      sseBuffer = final ? "" : (lines.pop() ?? "");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") {
+          sawDone = true;
+          continue;
+        }
+        try {
+          const json = JSON.parse(data) as {
+            choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+            usage?: { prompt_tokens?: number; completion_tokens?: number };
+          };
+          const piece =
+            json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
+          if (piece) {
+            text += piece;
+            options.onToken?.(piece);
+          }
+          if (json.usage) {
+            promptTokens = json.usage.prompt_tokens ?? promptTokens;
+            completionTokens = json.usage.completion_tokens ?? completionTokens;
+          }
+        } catch {
+          /* ligne SSE malformee : ignoree */
+        }
+      }
+    };
 
     while (true) {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -145,7 +184,7 @@ export class OpenAICompatProvider implements LlmProvider {
         } catch {
           /* ignore */
         }
-        if (!text.trim()) {
+        if (!text.trim() && !raw.trim()) {
           throw new ProviderError(
             "Le fournisseur ne repond plus (flux bloque). Reessaie ou change de profil.",
             0,
@@ -156,40 +195,52 @@ export class OpenAICompatProvider implements LlmProvider {
       }
       const { value, done } = chunkResult as { value?: Uint8Array; done: boolean };
       if (done) break;
-      lastData = Date.now();
-      void lastData;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === "[DONE]") continue;
-        try {
-          const json = JSON.parse(data) as {
-            choices?: { delta?: { content?: string } }[];
-            usage?: { prompt_tokens?: number; completion_tokens?: number };
-          };
-          const piece = json.choices?.[0]?.delta?.content ?? "";
-          if (piece) {
-            text += piece;
-            options.onToken?.(piece);
-          }
-          if (json.usage) {
-            promptTokens = json.usage.prompt_tokens ?? promptTokens;
-            completionTokens = json.usage.completion_tokens ?? completionTokens;
-          }
-        } catch {
-          /* ignore malformed sse */
-        }
+      const piece = decoder.decode(value, { stream: true });
+      raw += piece;
+      // Detection paresseuse SSE/JSON sur les premieres donnees utiles.
+      if (lookedLikeSse === null) {
+        const probe = raw.replace(/^\s+/, "");
+        if (probe.length >= 5) lookedLikeSse = probe.startsWith("data:") || probe.startsWith("event:");
+      }
+      if (lookedLikeSse) {
+        sseBuffer += piece;
+        consumeSse(false);
       }
     }
 
+    let promptTok = promptTokens;
+    let completionTok = completionTokens;
+    if (lookedLikeSse) {
+      consumeSse(true);
+      // Certains flux n'envoient que des "message" (sans delta) : filet de securite.
+      if (!text.trim()) {
+        const parsed = parseOpenAiBody(raw);
+        if (parsed && parsed.text) {
+          text = parsed.text;
+          options.onToken?.(parsed.text);
+          promptTok = promptTok || parsed.promptTokens;
+          completionTok = completionTok || parsed.completionTokens;
+        }
+      }
+    } else {
+      // Reponse JSON simple (stream=false) : on parse le corps complet.
+      const parsed = parseOpenAiBody(raw);
+      if (!parsed) {
+        throw new ProviderError("Reponse fournisseur illisible.", 0, true);
+      }
+      if (parsed.text) {
+        text = parsed.text;
+        options.onToken?.(parsed.text);
+      }
+      promptTok = promptTok || parsed.promptTokens;
+      completionTok = completionTok || parsed.completionTokens;
+    }
+    void sawDone;
+
     return {
       text,
-      promptTokens: promptTokens || estimateTokens(JSON.stringify(messages)),
-      completionTokens: completionTokens || estimateTokens(text),
+      promptTokens: promptTok || estimateTokens(JSON.stringify(messages)),
+      completionTokens: completionTok || estimateTokens(text),
     };
   }
 }

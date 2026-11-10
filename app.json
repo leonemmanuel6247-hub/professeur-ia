@@ -22,7 +22,7 @@
         "backgroundColor": "#040615"
       },
       "package": "com.leon.professeuria",
-      "versionCode": 6,
+      "versionCode": 7,
       "permissions": [
         "CAMERA",
         "INTERNET",

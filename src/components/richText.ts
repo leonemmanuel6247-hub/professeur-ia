@@ -117,7 +117,7 @@ export function buildMessageHtml(content: string, theme: ThemeColors, bubbleId =
   const body = markdownToHtml(content);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:;"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:;"/>
 <style>${KATEX_CSS}</style>
 <style>
 html,body{margin:0;padding:0;background:transparent;overflow:visible}
@@ -141,26 +141,33 @@ a{pointer-events:none;color:${theme.primary}}
 </style></head><body>${body}
 <script>
 (function(){
-  var last=0;
+  var last=-1;
+  function measure(){
+    try{
+      var b=document.body;
+      var h=Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height,
+        document.documentElement.scrollHeight,document.documentElement.getBoundingClientRect().height);
+      return Math.ceil(h);
+    }catch(e){ return 0; }
+  }
   function send(){
     try{
-      var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);
-      if(Math.abs(h-last)<2) return;
+      var h=measure();
+      if(h<1) return;
+      if(Math.abs(h-last)<1) return;
       last=h;
       if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(String(h)); }
       else if(window.parent){ window.parent.postMessage({__katexH:h,__katexId:${JSON.stringify(bubbleId)}}, "*"); }
     }catch(e){}
   }
-  if(window.ResizeObserver){
-    var ro=new ResizeObserver(function(){ send(); });
-    ro.observe(document.body);
-  }
-  if(window.MutationObserver){
-    new MutationObserver(function(){ send(); }).observe(document.body,{childList:true,subtree:true,characterData:true});
-  }
+  if(window.ResizeObserver){ try{ new ResizeObserver(function(){ send(); }).observe(document.body); }catch(e){} }
+  if(window.MutationObserver){ try{ new MutationObserver(function(){ send(); }).observe(document.body,{childList:true,subtree:true,characterData:true}); }catch(e){} }
   window.addEventListener("load",send);
   document.fonts && document.fonts.ready && document.fonts.ready.then(send);
-  [0,50,150,400,900,1600].forEach(function(t){ setTimeout(send,t); });
+  [0,30,80,150,250,400,600,900,1200,1600,2200,3000].forEach(function(t){ setTimeout(send,t); });
+  // Surveillance continue : garantit que la hauteur reste synchronisee (streaming, polices, maths).
+  var ticks=0;
+  var iv=setInterval(function(){ send(); if(++ticks>120) clearInterval(iv); },120);
 })();
 </script>
 </body></html>`;

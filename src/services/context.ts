@@ -57,10 +57,27 @@ export async function buildProfessorMessages(opts: {
   const systemBase = fill(passages) + "\n" + bonus + "\n" + schemaRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "");
 
   const pack = () => {
+    const mapped = history.map((h) => ({
+      role: h.role as "user" | "assistant",
+      content: h.content,
+    }));
+    // Evite un doublon : si l'historique se termine deja par ce message eleve,
+    // on ne le re-ajoute pas une seconde fois.
+    const last = mapped[mapped.length - 1];
+    const already = last && last.role === "user" && last.content.trim() === opts.userText.trim();
     const msgs: LlmMessage[] = [
-      { role: "system", content: fill(passages) + "\n" + bonus + "\n" + schemaRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "") },
-      ...history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-      { role: "user", content: opts.userText },
+      {
+        role: "system",
+        content:
+          fill(passages) +
+          "\n" +
+          bonus +
+          "\n" +
+          schemaRule +
+          (opts.extraInstruction ? `\n${opts.extraInstruction}` : ""),
+      },
+      ...mapped,
+      ...(already ? [] : [{ role: "user" as const, content: opts.userText }]),
     ];
     const tokens = msgs.reduce((s, m) => s + estimateTokens(typeof m.content === "string" ? m.content : ""), 0);
     return { msgs, tokens };

@@ -62,6 +62,7 @@ export function ChatScreen() {
   const [input, setInput] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const sendStartRef = useRef(0);
+  const runIdRef = useRef(0);
   const messagesRef = useRef<ChatMessage[]>([]);
   const listRef = useRef<FlatList>(null);
   const scrollThrottle = useRef(0);
@@ -143,17 +144,19 @@ export function ChatScreen() {
     }
     const userText = text.trim();
     if (!userText && !attachment) return;
-    const staleMs = 5 * 60 * 1000;
-    if (streaming && sendStartRef.current && Date.now() - sendStartRef.current > staleMs) {
+    if (ingesting) return;
+    // Une nouvelle question n'attend pas : on interrompt proprement la generation
+    // en cours (comme un chat classique) pour toujours laisser passer le message.
+    if (streaming) {
       try {
         abortRef.current?.abort();
       } catch {
         /* ignore */
       }
       setStreaming(false);
-      abortRef.current = null;
+      sendStartRef.current = 0;
     }
-    if (streaming || ingesting) return;
+    abortRef.current = null;
     if (!isFreeChatCourse(course)) {
       try {
         const n = await countChunks(course.id);
@@ -185,6 +188,7 @@ export function ChatScreen() {
     setMessages((m) => [...m, placeholder]);
     const ac = new AbortController();
     abortRef.current = ac;
+    const runId = ++runIdRef.current;
     sendStartRef.current = Date.now();
     setStreaming(true);
     try {
@@ -256,6 +260,9 @@ export function ChatScreen() {
           setMessages((ms) =>
             ms.map((x) => (x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x))
           );
+          messagesRef.current = messagesRef.current.map((x) =>
+            x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x
+          );
           scrollOnGrow();
         },
       });
@@ -267,6 +274,9 @@ export function ChatScreen() {
         tokens: res.completionTokens,
       });
       setMessages((ms) => ms.map((x) => (x.id === assistantId ? { ...x, content: res.text, tokens: res.completionTokens } : x)));
+      messagesRef.current = messagesRef.current.map((x) =>
+        x.id === assistantId ? { ...x, content: res.text, tokens: res.completionTokens } : x
+      );
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
       const blocks = extractSchemaBlocks(res.text);
       if (blocks.spec || blocks.html) {
@@ -290,10 +300,14 @@ export function ChatScreen() {
       setMessages((ms) =>
         ms.map((x) => (x.id === assistantId ? { ...x, content: x.content || `Erreur : ${msg}` } : x))
       );
-      Alert.alert("Generation", msg);
+      // Une interruption volontaire (nouvelle question / Stop) ne doit pas alerter.
+      const aborted = ac.signal.aborted || /arretee|aborted/i.test(msg);
+      if (!aborted && runId === runIdRef.current) Alert.alert("Generation", msg);
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      if (runId === runIdRef.current) {
+        setStreaming(false);
+        abortRef.current = null;
+      }
     }
   };
 
@@ -557,18 +571,16 @@ export function ChatScreen() {
           {streaming ? (
             <Btn title="Stop" variant="danger" onPress={() => abortRef.current?.abort()} />
           ) : (
-            <>
-              <Btn
-                title="Regen"
-                variant="ghost"
-                onPress={() => {
-                  const lastUser = [...messages].reverse().find((m) => m.role === "user");
-                  if (lastUser) send("Regénère ta dernière réponse, plus claire.");
-                }}
-              />
-              <Btn title="Envoyer" onPress={() => send(input)} />
-            </>
+            <Btn
+              title="Regen"
+              variant="ghost"
+              onPress={() => {
+                const lastUser = [...messages].reverse().find((m) => m.role === "user");
+                if (lastUser) send("Regénère ta dernière réponse, plus claire.");
+              }}
+            />
           )}
+          <Btn title="Envoyer" onPress={() => send(input)} />
         </View>
       </KeyboardAvoidingView>
     </Screen>
