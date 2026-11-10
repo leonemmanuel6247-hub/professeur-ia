@@ -120,8 +120,8 @@ export function buildMessageHtml(content: string, theme: ThemeColors, bubbleId =
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:;"/>
 <style>${KATEX_CSS}</style>
 <style>
-html,body{margin:0;padding:0;background:transparent;overflow:hidden}
-body{padding:4px 6px 12px;color:${theme.text};font-family:system-ui,-apple-system,sans-serif;font-size:16px;line-height:1.65;word-wrap:break-word}
+html,body{margin:0;padding:0;background:transparent;overflow:visible}
+body{padding:2px 2px 10px;color:${theme.text};font-family:system-ui,-apple-system,sans-serif;font-size:16px;line-height:1.65;word-wrap:break-word}
 h1,h2,h3,h4{margin:12px 0 6px;line-height:1.25}
 h1{font-size:20px}h2{font-size:18px}h3{font-size:16px}h4{font-size:15px}
 p{margin:6px 0}
@@ -141,14 +141,26 @@ a{pointer-events:none;color:${theme.primary}}
 </style></head><body>${body}
 <script>
 (function(){
+  var last=0;
   function send(){
     try{
-      var h=document.documentElement.scrollHeight;
+      var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);
+      if(Math.abs(h-last)<2) return;
+      last=h;
       if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(String(h)); }
       else if(window.parent){ window.parent.postMessage({__katexH:h,__katexId:${JSON.stringify(bubbleId)}}, "*"); }
     }catch(e){}
   }
-  send(); setTimeout(send, 80); setTimeout(send, 400);
+  if(window.ResizeObserver){
+    var ro=new ResizeObserver(function(){ send(); });
+    ro.observe(document.body);
+  }
+  if(window.MutationObserver){
+    new MutationObserver(function(){ send(); }).observe(document.body,{childList:true,subtree:true,characterData:true});
+  }
+  window.addEventListener("load",send);
+  document.fonts && document.fonts.ready && document.fonts.ready.then(send);
+  [0,50,150,400,900,1600].forEach(function(t){ setTimeout(send,t); });
 })();
 </script>
 </body></html>`;

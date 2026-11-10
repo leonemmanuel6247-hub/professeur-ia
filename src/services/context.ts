@@ -108,38 +108,144 @@ export async function buildProfessorMessages(opts: {
   return packed.msgs;
 }
 
-export function extractSchemaBlocks(text: string): { spec: string | null; html: string | null } {
-  const json = text.match(/```json\s*([\s\S]*?)```/i);
-  const html = text.match(/```html\s*([\s\S]*?)```/i);
-  let spec = json ? json[1].trim() : null;
-  if (!spec) {
-    const bare = text.match(/\{\s*"titre"[\s\S]*?"objets"\s*:\s*\[[\s\S]*?\][\s\S]*?\}/);
-    if (bare) spec = bare[0].trim();
-  }
-  return {
-    spec,
-    html: html ? html[1].trim() : null,
-  };
+const CODEFENCE_RE = /(`{3,}|'{3,})[ \t]*([a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)(?:\1|$)/g;
+
+function stripFenceNoise(s: string): string {
+  return s
+    .replace(/^[ \t]*(`{3,}|'{3,})[ \t]*/gm, "")
+    .replace(/^[ \t]*(html|svg|json|javascript|js|xml)[ \t]*$/gim, "")
+    .trim();
 }
 
-export function stripSchemaFromText(text: string): string {
-  let t = text || "";
-  t = t.replace(/```json\s*[\s\S]*?```/gi, "");
-  t = t.replace(/```html\s*[\s\S]*?```/gi, "");
-  t = t.replace(/```[a-z]*\s*[\s\S]*?```/gi, (block) => {
-    const inner = block.replace(/^```[a-z]*/i, "").replace(/```$/, "").trim();
-    if (/^\{[\s\S]*"objets"\s*:/.test(inner) || /"titre"\s*:[\s\S]*"objets"\s*:/.test(inner)) {
-      return "";
+function looksLikeSvgHtml(s: string): boolean {
+  return /<(svg|canvas|div|table|figure|math|iframe)\b/i.test(s) || /<\/(svg|canvas|div)>/i.test(s);
+}
+
+function looksLikeSchemaSpec(s: string): boolean {
+  return /"(objets|titre|titres?|elements?|points?|formes?|steps?)"\s*:/.test(s) && /\{[\s\S]*\}/.test(s);
+}
+
+function safeJsonParse(s: string): unknown | null {
+  const trimmed = s.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(trimmed.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+export function extractSchemaBlocks(text: string): { spec: string | null; html: string | null } {
+  const src = text || "";
+  let spec: string | null = null;
+  let html: string | null = null;
+
+  CODEFENCE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CODEFENCE_RE.exec(src)) !== null) {
+    let lang = (m[2] || "").toLowerCase();
+    const body = m[3] || "";
+    if (!lang) {
+      const firstWord = (body.match(/^[ \t]*([a-zA-Z0-9_-]+)[ \t]*\r?\n/) || [])[1];
+      if (firstWord) lang = firstWord.toLowerCase();
     }
-    return block;
+    const clean = stripFenceNoise(body);
+    if (!clean) continue;
+    const isHtmlBlock =
+      lang === "html" || lang === "svg" || lang === "xml" || looksLikeSvgHtml(clean);
+    if (isHtmlBlock && !html) {
+      html = clean;
+      continue;
+    }
+    if ((lang === "json" || lang === "" || looksLikeSchemaSpec(clean)) && !spec) {
+      if (safeJsonParse(clean)) spec = clean;
+    }
+  }
+
+  if (!spec) {
+    const start = src.search(/\{\s*"(?:objets|titre|titres?|elements?)"\s*:/);
+    if (start >= 0) {
+      let depth = 0;
+      let end = -1;
+      let inStr = false;
+      let esc = false;
+      for (let i = start; i < src.length; i += 1) {
+        const ch = src[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === "\\") esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') inStr = true;
+        else if (ch === "{") depth += 1;
+        else if (ch === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+      if (end > start) {
+        const candidate = src.slice(start, end + 1);
+        if (safeJsonParse(candidate)) spec = candidate;
+      }
+    }
+  }
+
+  if (!html) {
+    const firstDraw = src.search(/<(?:svg|canvas)\b/i);
+    if (firstDraw >= 0) {
+      const lower = src.toLowerCase();
+      const closeIdx = Math.max(lower.lastIndexOf("</svg>"), lower.lastIndexOf("</canvas>"));
+      let end = src.length;
+      if (closeIdx >= firstDraw) {
+        const tag = lower.lastIndexOf("</canvas>") > lower.lastIndexOf("</svg>") ? "</canvas>" : "</svg>";
+        end = closeIdx + tag.length;
+      }
+      let chunk = src.slice(firstDraw, end);
+      const blankBreak = chunk.search(/\n[ \t]*\n(?=[A-Za-zÀ-ÿ])/);
+      if (blankBreak > 0) {
+        const head = chunk.slice(0, blankBreak);
+        if (/<\/(?:svg|canvas)>/i.test(head)) chunk = head;
+      }
+      html = stripFenceNoise(chunk);
+    }
+  }
+
+  return { spec, html };
+}
+
+const SCHEMA_LANGS = ["html", "svg", "json", "xml"];
+
+export function stripSchemaFromText(text: string): string {
+  const t = text || "";
+  const { spec, html } = extractSchemaBlocks(t);
+  let out = t;
+
+  if (html) out = out.split(html).join("");
+  if (spec) out = out.split(spec).join("");
+
+  const FENCE_RE = /(`{3,}|'{3,})[ \t]*([a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)(?:\1|$)/g;
+  out = out.replace(FENCE_RE, (whole: string, _fence: string, lang: string, body: string) => {
+    let l = (lang || "").toLowerCase();
+    if (!l) {
+      const w = ((body || "").match(/^[ \t]*([a-zA-Z0-9_-]+)[ \t]*\r?\n/) || [])[1];
+      if (w) l = w.toLowerCase();
+    }
+    if (SCHEMA_LANGS.includes(l)) return "";
+    const bodyClean = (body || "").replace(/^[ \t]*(?:html|svg|json|xml)[ \t]*$/gim, "");
+    if (/<(?:svg|canvas)\b/i.test(bodyClean)) return "";
+    return whole;
   });
-  t = t.replace(/\{[\s\S]*?"objets"\s*:\s*\[[\s\S]*?\]\s*,[\s\S]*?\}\s*\}?/g, (m) => {
-    const trimmed = m.trim();
-    if (/"titre"\s*:/.test(trimmed) || /"objets"\s*:/.test(trimmed)) return "";
-    return m;
-  });
-  t = t.replace(/\{\s*"titre"[\s\S]*?"objets"[\s\S]*?\}\s*\}?/g, "").trim();
-  return t.trim();
+
+  out = out.replace(/^[ \t]*(?:html|svg|json|javascript|js|xml)[ \t]*$/gim, "");
+  out = out.replace(/^[ \t]*copy[ \t]*$/gim, "");
+  out = out.replace(/\n{3,}/g, "\n\n");
+  return out.trim();
 }
 
 function compactText(text: string, max = 280): string {

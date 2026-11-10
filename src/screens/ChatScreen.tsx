@@ -538,7 +538,7 @@ export function ChatScreen() {
 function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
   const theme = useAppStore((s) => s.theme);
   const mine = msg.role === "user";
-  const [schemaOpen, setSchemaOpen] = React.useState(false);
+  const [schemaOpen, setSchemaOpen] = React.useState(true);
   const [schemaHidden, setSchemaHidden] = React.useState(false);
   const schema = React.useMemo(() => {
     if (mine) return null;
@@ -620,7 +620,7 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
               {schemaOpen ? (
                 <View
                   style={{
-                    height: 460,
+                    height: 520,
                     marginTop: 8,
                     borderRadius: 14,
                     overflow: "hidden",
