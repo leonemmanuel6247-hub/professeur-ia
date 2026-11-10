@@ -113,3 +113,5 @@ android/
 *.7z
 *.tar
 *.tar.gz
+
+.monkeycode-tmp-files/

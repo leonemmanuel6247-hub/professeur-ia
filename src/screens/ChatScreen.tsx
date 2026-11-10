@@ -61,9 +61,12 @@ export function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const sendStartRef = useRef(0);
+  const messagesRef = useRef<ChatMessage[]>([]);
   const listRef = useRef<FlatList>(null);
   const scrollThrottle = useRef(0);
   const [ingesting, setIngesting] = useState<{ step: string; ratio: number } | null>(null);
+  const [pendingIntro, setPendingIntro] = useState(false);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
 
   const planSections = course && params.mode === "lesson" ? flattenPlan(parsePlan(course.planJson)) : [];
@@ -96,7 +99,9 @@ export function ChatScreen() {
         else cid = (await createConversation(courseId, c?.title || "Lecon")).id;
       }
       setConvId(cid!);
-      setMessages(await listMessages(cid!));
+      const loaded = await listMessages(cid!);
+      messagesRef.current = loaded;
+      setMessages(loaded);
       if (params.mode === "lesson" && params.sectionId && c) {
         const plan = parsePlan(c.planJson);
         const section = findSection(plan, params.sectionId);
@@ -119,6 +124,10 @@ export function ChatScreen() {
   };
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     const t = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     return () => clearTimeout(t);
   }, [messages.length]);
@@ -134,6 +143,16 @@ export function ChatScreen() {
     }
     const userText = text.trim();
     if (!userText && !attachment) return;
+    const staleMs = 5 * 60 * 1000;
+    if (streaming && sendStartRef.current && Date.now() - sendStartRef.current > staleMs) {
+      try {
+        abortRef.current?.abort();
+      } catch {
+        /* ignore */
+      }
+      setStreaming(false);
+      abortRef.current = null;
+    }
     if (streaming || ingesting) return;
     if (!isFreeChatCourse(course)) {
       try {
@@ -151,6 +170,7 @@ export function ChatScreen() {
     setInput("");
     const joinedLabel = attachment?.kind === "file" ? "(PDF joint)" : "(image jointe)";
     const um = await addMessage({ conversationId: convId, role: "user", content: userText || joinedLabel, tokens: 0 });
+    messagesRef.current = [...messagesRef.current, um];
     setMessages((m) => [...m, um]);
     const assistantId = await uid("msg");
     const placeholder: ChatMessage = {
@@ -161,12 +181,17 @@ export function ChatScreen() {
       tokens: 0,
       createdAt: Date.now(),
     };
+    messagesRef.current = [...messagesRef.current, placeholder];
     setMessages((m) => [...m, placeholder]);
     const ac = new AbortController();
     abortRef.current = ac;
+    sendStartRef.current = Date.now();
     setStreaming(true);
     try {
-      const history = [...messages, um]
+      const prior = messagesRef.current.some((x) => x.id === um.id)
+        ? messagesRef.current
+        : [...messagesRef.current, um];
+      const history = prior
         .filter((x) => x.role !== "system")
         .slice(-12)
         .map((x) => ({ role: x.role as "user" | "assistant", content: x.content }));
@@ -339,11 +364,26 @@ export function ChatScreen() {
       const c = await ensureFreeChatCourse();
       setActiveCourse(c.id);
       await refresh();
+      setPendingIntro(true);
       nav.setParams({ courseId: c.id } as any);
     } catch (e) {
       Alert.alert("Erreur", e instanceof Error ? e.message : String(e));
     }
   };
+
+  useEffect(() => {
+    if (!pendingIntro || !convId || !course) return;
+    if (messagesRef.current.length > 0) {
+      setPendingIntro(false);
+      return;
+    }
+    setPendingIntro(false);
+    void send(
+      "Nous allons commencer. Je vais t'envoyer un livre (document PDF) a etudier.",
+      "ANNONCE D'ACCUEIL : l'eleve va t'envoyer un LIVRE (un long document PDF) a etudier. Reponds en professeur : dis que tu es pret a recevoir le livre, explique brievement que tu vas le lire, en extraire la fiche d'identite, construire un plan, puis l'enseigner chapitre par chapitre. Termine en demandant a l'eleve de joindre le PDF (bouton PDF). Reponse courte (5 lignes max), en francais, SANS schema."
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingIntro, convId, course]);
 
   if (!courseId) {
     return (

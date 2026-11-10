@@ -43,33 +43,65 @@ export class OpenAICompatProvider implements LlmProvider {
       })),
     };
 
+    const connectMs = local ? 30000 : 90000;
     const tryOnce = async (stream: boolean) => {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey || "nem"}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ...payload, stream }),
-        signal: options.abortSignal,
-      });
-      return res;
+      const ctrl = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        ctrl.abort();
+      }, connectMs);
+      const onAbort = () => ctrl.abort();
+      if (options.abortSignal) {
+        if (options.abortSignal.aborted) ctrl.abort();
+        else options.abortSignal.addEventListener("abort", onAbort);
+      }
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey || "nem"}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ...payload, stream }),
+          signal: ctrl.signal,
+        });
+        return res;
+      } catch (e) {
+        if (timedOut) {
+          throw new ProviderError(
+            local
+              ? `Pas de reponse de NemApi en ${Math.round(connectMs / 1000)}s. Verifie que l'app est demarree, meme Wi-Fi, URL http://IP:8090/v1.`
+              : `Le fournisseur ne repond pas (${Math.round(connectMs / 1000)}s).`,
+            0,
+            true
+          );
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer);
+        options.abortSignal?.removeEventListener("abort", onAbort);
+      }
     };
 
     let res: Response;
     try {
+      // Local (NemApi) : pas de streaming (le SSE simule peut bloquer).
+      // Distant : streaming avec repli non-stream en cas d'echec.
       res = await tryOnce(!local);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "reseau";
       if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
-      if (local) {
+      if (e instanceof ProviderError) throw e;
+      if (!local) {
         try {
           res = await tryOnce(false);
-        } catch {
-          throw new ProviderError(localNetHint(this.baseUrl, msg), 0, true);
+        } catch (e2) {
+          if (e2 instanceof ProviderError) throw e2;
+          throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);
         }
       } else {
-        throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);
+        throw new ProviderError(localNetHint(this.baseUrl, msg), 0, true);
       }
     }
 
@@ -97,10 +129,35 @@ export class OpenAICompatProvider implements LlmProvider {
     let text = "";
     let promptTokens = 0;
     let completionTokens = 0;
+    const idleMs = local ? 30000 : 120000;
+    let lastData = Date.now();
 
     while (true) {
-      const { value, done } = await reader.read();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<"idle">((resolve) => {
+        timer = setTimeout(() => resolve("idle"), idleMs);
+      });
+      const chunkResult = await Promise.race([reader.read(), idle]);
+      if (timer) clearTimeout(timer);
+      if (chunkResult === "idle") {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        if (!text.trim()) {
+          throw new ProviderError(
+            "Le fournisseur ne repond plus (flux bloque). Reessaie ou change de profil.",
+            0,
+            true
+          );
+        }
+        break;
+      }
+      const { value, done } = chunkResult as { value?: Uint8Array; done: boolean };
       if (done) break;
+      lastData = Date.now();
+      void lastData;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
