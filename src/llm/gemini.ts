@@ -90,20 +90,15 @@ export class GeminiProvider implements LlmProvider {
       ? root
       : `${root.replace(/\/models\/.*$/, "")}/interactions`;
 
-    const GEMINI_TIMEOUT_MS = 120_000;
+    // Aucun timeout : on attend la fin complete de la generation, meme si cela
+    // prend des heures. Seul le bouton "Stop" (abortSignal) peut interrompre.
     const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, GEMINI_TIMEOUT_MS);
     const onAbort = () => controller.abort();
     if (options.abortSignal) {
       if (options.abortSignal.aborted) controller.abort();
       else options.abortSignal.addEventListener("abort", onAbort);
     }
     const cleanup = () => {
-      clearTimeout(timer);
       options.abortSignal?.removeEventListener("abort", onAbort);
     };
 
@@ -147,13 +142,6 @@ export class GeminiProvider implements LlmProvider {
       });
     } catch (e) {
       cleanup();
-      if (timedOut) {
-        throw new ProviderError(
-          "Gemini n'a pas repondu dans les 2 minutes. Reessaie ou reduis la taille du document.",
-          0,
-          true
-        );
-      }
       if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
       const msg = e instanceof Error ? e.message : "reseau";
       throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);

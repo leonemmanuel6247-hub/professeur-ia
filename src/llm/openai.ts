@@ -43,15 +43,10 @@ export class OpenAICompatProvider implements LlmProvider {
       })),
     };
 
-    // Timeout tres long (10 min) : on laisse le fournisseur repondre, meme lentement.
-    const connectMs = 10 * 60 * 1000;
+    // Aucun timeout : on attend la fin complete de la generation, meme si cela
+    // prend des heures. Seul le bouton "Stop" (abortSignal) peut interrompre.
     const tryOnce = async (stream: boolean) => {
       const ctrl = new AbortController();
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        ctrl.abort();
-      }, connectMs);
       const onAbort = () => ctrl.abort();
       if (options.abortSignal) {
         if (options.abortSignal.aborted) ctrl.abort();
@@ -69,27 +64,18 @@ export class OpenAICompatProvider implements LlmProvider {
         });
         return res;
       } catch (e) {
-        if (timedOut) {
-          throw new ProviderError(
-            local
-              ? `Pas de reponse de NemApi en ${Math.round(connectMs / 60000)} min. Verifie que l'app est demarree, meme Wi-Fi, URL http://IP:8090/v1.`
-              : `Le fournisseur ne repond pas (${Math.round(connectMs / 60000)} min).`,
-            0,
-            true
-          );
-        }
+        if (options.abortSignal?.aborted) throw e;
         throw e;
       } finally {
-        clearTimeout(timer);
         options.abortSignal?.removeEventListener("abort", onAbort);
       }
     };
 
     let res: Response;
     try {
-      // Local (NemApi) : pas de streaming (le SSE simule peut bloquer).
-      // Distant : streaming avec repli non-stream en cas d'echec.
-      res = await tryOnce(!local);
+      // Streaming partout (y compris NemApi) : le texte s'affiche au fur et a mesure.
+      // Distant : repli non-stream uniquement si le streaming echoue.
+      res = await tryOnce(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "reseau";
       if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
@@ -98,6 +84,7 @@ export class OpenAICompatProvider implements LlmProvider {
         try {
           res = await tryOnce(false);
         } catch (e2) {
+          if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
           if (e2 instanceof ProviderError) throw e2;
           throw new ProviderError(`Reseau indisponible : ${msg}`, 0, true);
         }
@@ -129,7 +116,6 @@ export class OpenAICompatProvider implements LlmProvider {
     let text = "";
     let promptTokens = 0;
     let completionTokens = 0;
-    const idleMs = 10 * 60 * 1000;
 
     // On accumule TOUTES les donnees brutes. Selon le fournisseur, le corps peut
     // etre du SSE (lignes "data: ...") OU un simple JSON (stream=false). On ne
@@ -171,29 +157,10 @@ export class OpenAICompatProvider implements LlmProvider {
       }
     };
 
+    // Lecture jusqu'a la FIN COMPLETE du flux : aucun timeout, aucun abandon.
+    // Seul le bouton "Stop" (abortSignal -> reader.read() rejette) interrompt.
     while (true) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const idle = new Promise<"idle">((resolve) => {
-        timer = setTimeout(() => resolve("idle"), idleMs);
-      });
-      const chunkResult = await Promise.race([reader.read(), idle]);
-      if (timer) clearTimeout(timer);
-      if (chunkResult === "idle") {
-        try {
-          await reader.cancel();
-        } catch {
-          /* ignore */
-        }
-        if (!text.trim() && !raw.trim()) {
-          throw new ProviderError(
-            "Le fournisseur ne repond plus (flux bloque). Reessaie ou change de profil.",
-            0,
-            true
-          );
-        }
-        break;
-      }
-      const { value, done } = chunkResult as { value?: Uint8Array; done: boolean };
+      const { value, done } = await reader.read();
       if (done) break;
       const piece = decoder.decode(value, { stream: true });
       raw += piece;
@@ -235,7 +202,6 @@ export class OpenAICompatProvider implements LlmProvider {
       promptTok = promptTok || parsed.promptTokens;
       completionTok = completionTok || parsed.completionTokens;
     }
-    void sawDone;
 
     return {
       text,

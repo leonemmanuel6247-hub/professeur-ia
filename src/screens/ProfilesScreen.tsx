@@ -116,7 +116,7 @@ export function ProfilesScreen() {
           maxTokens: 16,
           temperature: 0,
         }),
-        120000
+        0
       );
       const ms = Date.now() - started;
       setInfo(
@@ -303,6 +303,7 @@ export function ProfilesScreen() {
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  if (ms <= 0) return p;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
       () =>
