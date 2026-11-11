@@ -3,7 +3,7 @@ import * as ImagePicker from "expo-image-picker";
 import { uid } from "../db/database";
 import { AiProfile, Course, CoursePlanSection } from "../types";
 import { LlmMessage } from "../llm/types";
-import { chatWithFallback } from "../llm/router";
+import { chatUntilFinished } from "../llm/router";
 import { fillPrompt } from "../prompts/defaults";
 import { addChunk, addPage, createCourse, updateCourse, listPages, getCourse } from "./courses";
 import {
@@ -16,6 +16,13 @@ import {
 } from "./pdf";
 
 export type IngestProgress = (step: string, ratio: number) => void;
+
+// Instruction imposee a TOUS les appels d'extraction : le modele doit terminer
+// par <FIN>. On lit ce marqueur pour distinguer une vraie fin d'une simple
+// pause de reflexion (le chatbot peut fermer le flux au milieu de sa reponse).
+const FINISH_RULE =
+  "\n\nIMPÉRATIF : ne t'arrête JAMAIS en milieu de réponse, même après une longue pause de réflexion. " +
+  "Lorsque — et seulement lorsque — tu as fini la TOTALITÉ de ta réponse, écris <FIN> seul sur la dernière ligne.";
 
 export interface IngestResult {
   course: Course;
@@ -73,10 +80,10 @@ async function analyzeStructure(
     });
     const messages: LlmMessage[] = [
       { role: "system", content: "Tu reponds uniquement en JSON valide." },
-      { role: "user", content: prompt },
+      { role: "user", content: prompt + FINISH_RULE },
     ];
     try {
-      const res = await chatWithFallback(profiles, messages, {
+      const res = await chatUntilFinished(profiles, messages, {
         temperature: 0.1,
         onToken: li === 0 ? onToken : undefined,
       });
@@ -218,13 +225,15 @@ async function extractPdfPages(
     onProgress("Envoi du PDF au fournisseur...", 0.2);
     usedVision = true;
     const mime = await guessMime(name, "application/pdf");
-    const res = await chatWithFallback(readers, [
+    const res = await chatUntilFinished(readers, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text: "Extrais tout le texte du document, page par page, sous la forme:\n===PAGE n===\ntexte",
+            text:
+              "Extrais tout le texte du document, page par page, sous la forme:\n===PAGE n===\ntexte" +
+              FINISH_RULE,
           },
           { type: "file", mimeType: mime, dataBase64: b64, fileName: name },
         ],
@@ -246,13 +255,15 @@ async function extractPdfPages(
     }
     onProgress("PDF scanne : lecture par vision...", 0.2);
     usedVision = true;
-    const res = await chatWithFallback(vision, [
+    const res = await chatUntilFinished(vision, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text: "Ce PDF n'a pas de texte natif exploitable. Analyse le document fourni et transcris son contenu page par page sous la forme:\n===PAGE n===\ntexte.\nSi vraiment illisible, reponds DOCUMENT_ILLISIBLE.",
+            text:
+              "Ce PDF n'a pas de texte natif exploitable. Analyse le document fourni et transcris son contenu page par page sous la forme:\n===PAGE n===\ntexte.\nSi vraiment illisible, reponds DOCUMENT_ILLISIBLE." +
+              FINISH_RULE,
           },
           { type: "file", mimeType: "application/pdf", dataBase64: b64, fileName: name },
         ],
@@ -296,13 +307,15 @@ async function extractImagePages(
     onProgress(`Lecture image ${i + 1}/${files.length}…`, 0.1 + (0.5 * i) / files.length);
     const b64 = await readAsBase64(files[i].uri);
     const mime = await guessMime(files[i].name, "image/jpeg");
-    const res = await chatWithFallback(vision, [
+    const res = await chatUntilFinished(vision, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text: "Transcris integralement cette page de cours (texte + formules LaTeX). Indique [illisible] si une zone est floue.",
+            text:
+              "Transcris integralement cette page de cours (texte + formules LaTeX). Indique [illisible] si une zone est floue." +
+              FINISH_RULE,
           },
           { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
         ],
@@ -341,11 +354,21 @@ async function ingestImages(
 function parsePageMarkers(text: string): { number: number; text: string }[] {
   const parts = text.split(/===PAGE\s+(\d+)===/i);
   if (parts.length < 3) return splitIntoPages(text).map((t, i) => ({ number: i + 1, text: t }));
-  const out: { number: number; text: string }[] = [];
+  const byNumber = new Map<number, string>();
+  let auto = 0;
   for (let i = 1; i < parts.length; i += 2) {
-    out.push({ number: Number(parts[i]) || out.length + 1, text: (parts[i + 1] || "").trim() });
+    auto += 1;
+    const num = Number(parts[i]) || auto;
+    const body = (parts[i + 1] || "").trim();
+    if (!body) continue;
+    // En cas de reprise apres une pause, une meme page peut arriver deux fois :
+    // on garde la version la plus complete (la plus longue).
+    const prev = byNumber.get(num);
+    if (!prev || body.length > prev.length) byNumber.set(num, body);
   }
-  return out.filter((p) => p.text);
+  return [...byNumber.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([number, body]) => ({ number, text: body }));
 }
 
 async function persistCourse(

@@ -31,7 +31,7 @@ import {
   listMessages,
 } from "../services/conversations";
 import { buildProfessorMessages, extractSchemaBlocks, stripFinishMarker, stripSchemaFromText } from "../services/context";
-import { chatWithFallback } from "../llm/router";
+import { chatUntilFinished } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { uid, logError } from "../db/database";
 import { guessMime, readAsBase64, fileSize } from "../services/pdf";
@@ -246,7 +246,7 @@ export function ChatScreen() {
       }
       const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
       let lastPaint = 0;
-      const res = await chatWithFallback(ordered, built, {
+      const res = await chatUntilFinished(ordered, built, {
         abortSignal: ac.signal,
         maxTokens: Math.max(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.5)),
         onToken: (chunk) => {

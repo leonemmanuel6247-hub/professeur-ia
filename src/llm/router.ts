@@ -75,3 +75,66 @@ export async function chatWithFallback(
   }
   throw last ?? new ProviderError("Tous les fournisseurs ont echoue.", 0, true);
 }
+
+const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
+const MAX_CONTINUATIONS = 20;
+
+function stripFinish(text: string): string {
+  return text.replace(/[ \t]*<\s*\/?\s*FIN\s*>[ \t]*/gi, "").replace(/[ \t]*<\s*\/?\s*(?:F|FI|FIN?)?\s*$/i, "");
+}
+
+/**
+ * Appelle l'IA et REJOUE tant que la balise de fin <FIN> n'est pas presente.
+ * Certains chatbots-API ferment le flux pendant une pause de reflexion : le
+ * texte s'arrete alors en plein milieu. On relance en demandant la suite tant
+ * que le marqueur n'apparait pas, pour ne jamais considerer une pause comme
+ * une fin. Le texte accumule est renvoye au token pres via onToken.
+ */
+export async function chatUntilFinished(
+  profiles: AiProfile[],
+  messages: LlmMessage[],
+  options: ChatOptions = {}
+): Promise<ChatResult & { profileId: string }> {
+  const baseMessages = [...messages];
+  let acc = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let profileId = "";
+
+  for (let round = 0; round < MAX_CONTINUATIONS; round++) {
+    const history: LlmMessage[] = acc
+      ? [
+          ...baseMessages,
+          { role: "assistant", content: acc },
+          {
+            role: "user",
+            content:
+              "Continue EXACTEMENT la ou tu t'es arrete, sans rien repeter et sans recommencer. " +
+              "Rappel : tu ne dois ecrire la balise de fin <FIN> que lorsque toute ta reponse est totalement terminee.",
+          },
+        ]
+      : baseMessages;
+
+    const res = await chatWithFallback(profiles, history, options);
+    profileId = profileId || res.profileId;
+    promptTokens += res.promptTokens;
+    completionTokens += res.completionTokens;
+
+    const piece = stripFinish(res.text);
+    if (piece.trim()) {
+      acc = acc ? acc + piece : stripFinish(res.text);
+    }
+    // On teste la balise sur le texte BRUT de ce tour (sinon elle est deja
+    // retiree) : c'est elle qui signale une vraie fin, pas la fermeture du flux.
+    const finished = FINISH_RE.test(res.text);
+
+    if (finished) {
+      return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
+    }
+    if (!piece.trim()) {
+      // Le fournisseur n'a rien renvoye de plus : inutile de relancer encore.
+      break;
+    }
+  }
+  return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
+}
