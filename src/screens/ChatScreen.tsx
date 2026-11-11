@@ -18,9 +18,9 @@ import * as Clipboard from "expo-clipboard";
 import { useAppStore } from "../store/useAppStore";
 import { Btn, Chip, Screen, ProgressBar } from "../components/ui";
 import { DiamondLogo } from "../components/DiamondLogo";
-import { KatexBubble } from "../components/KatexBubble";
+import { MarkdownView } from "../components/MarkdownView";
 import { ExperienceWeb } from "../components/ExperienceWeb";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { ChatMessage, Course, SchemaSpec } from "../types";
 import { countChunks, getCourse, parsePlan, saveExperience, saveLesson, updateCourse, listLessons, ensureFreeChatCourse, isFreeChatCourse } from "../services/courses";
 import { ingestIntoCourse } from "../services/ingest";
@@ -65,7 +65,8 @@ export function ChatScreen() {
   const runIdRef = useRef(0);
   const messagesRef = useRef<ChatMessage[]>([]);
   const listRef = useRef<FlatList>(null);
-  const scrollThrottle = useRef(0);
+  const convIdRef = useRef(params.conversationId || "");
+  const sendingRef = useRef(false);
   const [ingesting, setIngesting] = useState<{ step: string; ratio: number } | null>(null);
   const [pendingIntro, setPendingIntro] = useState(false);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
@@ -76,15 +77,18 @@ export function ChatScreen() {
   const goToSection = (idx: number) => {
     const target = planSections[idx];
     if (!target) return;
+    messagesRef.current = [];
     setMessages([]);
     setInput("");
     nav.setParams({ sectionId: target.id, mode: "lesson" } as any);
   };
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       if (!courseId) return;
       const c = await getCourse(courseId);
+      if (cancelled) return;
       setCourse(c);
       let cid = params.conversationId;
       if (!cid && params.mode === "lesson" && params.sectionId && c) {
@@ -99,52 +103,32 @@ export function ChatScreen() {
         if (convs[0]) cid = convs[0].id;
         else cid = (await createConversation(courseId, c?.title || "Lecon")).id;
       }
-      // Changement de conversation : on repart de la base. Sinon, l'etat local
-      // reste la source de verite : on ne recharge PAS depuis la base, sinon on
-      // risque d'ecraser un message en cours (cause classique de messages qui
-      // disparaissent au 2e envoi).
-      const conversationChanged = cid !== convId;
-      // Ne jamais ecraser un message en cours d'envoi/generation.
-      const hasLocalContent = messagesRef.current.length > 0;
-      if (conversationChanged && (!streaming || !hasLocalContent)) {
+      if (cancelled || sendingRef.current) return;
+      const conversationChanged = cid !== convIdRef.current;
+      if (conversationChanged) {
+        convIdRef.current = cid!;
         setConvId(cid!);
         const loaded = await listMessages(cid!);
+        if (cancelled || sendingRef.current) return;
         messagesRef.current = loaded;
         setMessages(loaded);
       }
-      if (params.mode === "lesson" && params.sectionId && c) {
+      if (params.mode === "lesson" && params.sectionId && c && !sendingRef.current) {
         const plan = parsePlan(c.planJson);
         const section = findSection(plan, params.sectionId);
-        if (section) {
+        if (section && messagesRef.current.length === 0) {
           setInput(`Commence la lecon : ${section.title} (pages ${section.pageStart}-${section.pageEnd}).`);
         }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, params.conversationId, params.sectionId]);
 
-  const scrollToEnd = (animated = true) => {
-    listRef.current?.scrollToEnd({ animated });
-  };
-
-  const scrollOnGrow = () => {
-    const now = Date.now();
-    if (now - scrollThrottle.current < 250) return;
-    scrollThrottle.current = now;
-    listRef.current?.scrollToEnd({ animated: false });
-  };
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  useEffect(() => {
-    const t = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
-    return () => clearTimeout(t);
-  }, [messages.length]);
-
   const send = async (text: string, extra?: string, attachment?: Attachment) => {
-    if (!course || !convId) {
+    if (!course || !(convIdRef.current || convId)) {
       Alert.alert("Pas de cours", "Ouvre d'abord un cours depuis la bibliotheque.");
       return;
     }
@@ -155,8 +139,6 @@ export function ChatScreen() {
     const userText = text.trim();
     if (!userText && !attachment) return;
     if (ingesting) return;
-    // Une nouvelle question n'attend pas : on interrompt proprement la generation
-    // en cours (comme un chat classique) pour toujours laisser passer le message.
     if (streaming) {
       try {
         abortRef.current?.abort();
@@ -167,46 +149,46 @@ export function ChatScreen() {
       sendStartRef.current = 0;
     }
     abortRef.current = null;
-    if (!isFreeChatCourse(course)) {
-      try {
-        const n = await countChunks(course.id);
-        if (n === 0) {
-          Alert.alert(
-            "Cours vide",
-            "Ce cours ne contient aucun extrait de texte. Reimporte le document (PDF ou photos) depuis Importer, puis rouvre la lecon."
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    setInput("");
-    const joinedLabel = attachment?.kind === "file" ? "(PDF joint)" : "(image jointe)";
-    const um = await addMessage({ conversationId: convId, role: "user", content: userText || joinedLabel, tokens: 0 });
-    messagesRef.current = [...messagesRef.current, um];
-    setMessages((m) => [...m, um]);
-    const assistantId = await uid("msg");
-    const placeholder: ChatMessage = {
-      id: assistantId,
-      conversationId: convId,
-      role: "assistant",
-      content: "",
-      tokens: 0,
-      createdAt: Date.now(),
-    };
-    messagesRef.current = [...messagesRef.current, placeholder];
-    setMessages((m) => [...m, placeholder]);
+    sendingRef.current = true;
+    const runId = ++runIdRef.current;
     const ac = new AbortController();
     abortRef.current = ac;
-    const runId = ++runIdRef.current;
-    sendStartRef.current = Date.now();
-    setStreaming(true);
+    let assistantId = "";
     try {
-      const prior = messagesRef.current.some((x) => x.id === um.id)
-        ? messagesRef.current
-        : [...messagesRef.current, um];
-      const history = prior
-        .filter((x) => x.role !== "system")
+      if (!isFreeChatCourse(course)) {
+        try {
+          const n = await countChunks(course.id);
+          if (n === 0) {
+            Alert.alert(
+              "Cours vide",
+              "Ce cours ne contient aucun extrait de texte. Reimporte le document (PDF ou photos) depuis Importer, puis rouvre la lecon."
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      setInput("");
+      const activeConvId = convIdRef.current || convId;
+      const joinedLabel = attachment?.kind === "file" ? "(PDF joint)" : "(image jointe)";
+      const um = await addMessage({ conversationId: activeConvId, role: "user", content: userText || joinedLabel, tokens: 0 });
+      messagesRef.current = [...messagesRef.current, um];
+      setMessages([...messagesRef.current]);
+      assistantId = await uid("msg");
+      const placeholder: ChatMessage = {
+        id: assistantId,
+        conversationId: activeConvId,
+        role: "assistant",
+        content: "",
+        tokens: 0,
+        createdAt: Date.now(),
+      };
+      messagesRef.current = [...messagesRef.current, placeholder];
+      setMessages([...messagesRef.current]);
+      sendStartRef.current = Date.now();
+      setStreaming(true);
+      const history = messagesRef.current
+        .filter((x) => x.role !== "system" && x.id !== assistantId && x.content)
         .slice(-12)
         .map((x) => ({ role: x.role as "user" | "assistant", content: x.content }));
       const tpl =
@@ -267,13 +249,10 @@ export function ChatScreen() {
         abortSignal: ac.signal,
         maxTokens: Math.min(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.25)),
         onToken: (chunk) => {
-          setMessages((ms) =>
-            ms.map((x) => (x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x))
-          );
           messagesRef.current = messagesRef.current.map((x) =>
             x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x
           );
-          scrollOnGrow();
+          setMessages([...messagesRef.current]);
         },
       });
       const finalText = res.text && res.text.trim()
@@ -281,16 +260,15 @@ export function ChatScreen() {
         : "(Reponse vide recue du fournisseur. Verifie le modele et l'URL dans Profils IA.)";
       await addMessage({
         id: assistantId,
-        conversationId: convId,
+        conversationId: convIdRef.current || convId,
         role: "assistant",
         content: finalText,
         tokens: res.completionTokens,
       });
-      setMessages((ms) => ms.map((x) => (x.id === assistantId ? { ...x, content: finalText, tokens: res.completionTokens } : x)));
       messagesRef.current = messagesRef.current.map((x) =>
         x.id === assistantId ? { ...x, content: finalText, tokens: res.completionTokens } : x
       );
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+      setMessages([...messagesRef.current]);
       const blocks = extractSchemaBlocks(finalText);
       if (blocks.spec || blocks.html) {
         await maybeSaveSchema(course.id, blocks.spec, blocks.html, setExp);
@@ -310,14 +288,17 @@ export function ChatScreen() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await logError(msg);
-      setMessages((ms) =>
-        ms.map((x) => (x.id === assistantId ? { ...x, content: x.content || `Erreur : ${msg}` } : x))
-      );
-      // Une interruption volontaire (nouvelle question / Stop) ne doit pas alerter.
+      if (assistantId) {
+        messagesRef.current = messagesRef.current.map((x) =>
+          x.id === assistantId ? { ...x, content: x.content || `Erreur : ${msg}` } : x
+        );
+        setMessages([...messagesRef.current]);
+      }
       const aborted = ac.signal.aborted || /arretee|aborted/i.test(msg);
       if (!aborted && runId === runIdRef.current) Alert.alert("Generation", msg);
     } finally {
       if (runId === runIdRef.current) {
+        sendingRef.current = false;
         setStreaming(false);
         abortRef.current = null;
       }
@@ -463,9 +444,11 @@ export function ChatScreen() {
         <FlatList
           ref={listRef}
           data={messages}
+          extraData={messages}
           keyExtractor={(m) => m.id}
-          contentContainerStyle={{ padding: 12, paddingBottom: 32, gap: 4 }}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+          contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+          keyboardShouldPersistTaps="handled"
+          removeClippedSubviews={false}
           renderItem={({ item }) => (
             <Bubble
               msg={item}
@@ -624,6 +607,7 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
         borderRadius: 16,
         marginVertical: 10,
         maxWidth: "94%",
+        width: mine ? undefined : "94%",
         borderWidth: mine ? 0 : 1,
         borderColor: theme.border,
       }}
@@ -632,7 +616,7 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
         <Text style={{ color: "#fff", fontSize: 15 }}>{msg.content}</Text>
       ) : (
         <>
-          {textContent ? <KatexBubble content={textContent} /> : null}
+          {textContent ? <MarkdownView content={textContent} /> : null}
           {schema && !schemaHidden ? (
             <View style={{ marginTop: 12 }}>
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>

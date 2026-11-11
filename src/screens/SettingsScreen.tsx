@@ -2,12 +2,12 @@ import React from "react";
 import { Alert, ScrollView, Switch, Text, View } from "react-native";
 import { NavigationProp, useNavigation } from "@react-navigation/native";
 import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system";
 import { Btn, Card, Chip, H1, H2, P, Screen } from "../components/ui";
 import { useAppStore } from "../store/useAppStore";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { go } from "../nav";
 import { restoreBackup, shareBackup } from "../services/backup";
+import { readTextFile } from "../services/files";
 import { spacing } from "../theme";
 
 export function SettingsScreen() {
@@ -81,7 +81,7 @@ export function SettingsScreen() {
                 const picked = await DocumentPicker.getDocumentAsync({ type: "application/json" });
                 if (picked.canceled || !picked.assets?.[0]) return;
                 try {
-                  const txt = await FileSystem.readAsStringAsync(picked.assets[0].uri);
+                  const txt = await readTextFile(picked.assets[0].uri);
                   await restoreBackup(txt);
                   Alert.alert("Restauration", "Donnees restaurees. Relance l'app si besoin.");
                 } catch (e) {

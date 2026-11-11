@@ -1,12 +1,14 @@
 import React from "react";
 import { NavigationContainer, DefaultTheme, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
+import { navigationRef } from "./nav";
 import { useAppStore } from "./store/useAppStore";
 import { LibraryScreen } from "./screens/LibraryScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { CourseScreen } from "./screens/CourseScreen";
 import { ChatScreen } from "./screens/ChatScreen";
+import { NewConversationScreen } from "./screens/NewConversationScreen";
 import { ExperienceScreen } from "./screens/ExperienceScreen";
 import { ProgressScreen } from "./screens/ProgressScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -37,7 +39,7 @@ export function Navigation() {
     },
   };
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer ref={navigationRef} theme={navTheme}>
       <View style={{ flex: 1 }}>
         <Stack.Navigator
           initialRouteName="Chat"
@@ -49,9 +51,15 @@ export function Navigation() {
             headerBackTitle: "",
             contentStyle: { backgroundColor: theme.bg },
             headerLeft: () => <MenuButton />,
+            animation: Platform.OS === "web" ? "none" : "default",
           }}
         >
           <Stack.Screen name="Chat" component={ChatScreen} options={{ title: "Professeur IA" }} />
+          <Stack.Screen
+            name="NewConversation"
+            component={NewConversationScreen}
+            options={{ title: "Nouvelle conversation" }}
+          />
           <Stack.Screen name="Library" component={LibraryScreen} options={{ title: "Bibliotheque" }} />
           <Stack.Screen name="Import" component={ImportScreen} options={{ title: "Importer un cours" }} />
           <Stack.Screen name="Course" component={CourseScreen} options={{ title: "Fiche du cours" }} />

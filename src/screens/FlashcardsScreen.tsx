@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { RouteProp, useRoute } from "@react-navigation/native";
 import { Btn, Empty, H1, P, Screen } from "../components/ui";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { getCourse, parseIdentity } from "../services/courses";
 import { recordResult } from "../services/mastery";
 import { useAppStore } from "../store/useAppStore";

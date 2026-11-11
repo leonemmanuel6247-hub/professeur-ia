@@ -6,7 +6,7 @@ import { useAppStore } from "../store/useAppStore";
 import { ingestFromCamera, ingestFromLibrary, ingestPickedFiles } from "../services/ingest";
 import { orderedForRole } from "../services/providers";
 import { countChunks } from "../services/courses";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { spacing } from "../theme";
 import { logError } from "../db/database";
 

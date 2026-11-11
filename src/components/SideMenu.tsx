@@ -8,11 +8,10 @@ import {
   Text,
   View,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
-import type { NavigationProp } from "@react-navigation/native";
 import { useAppStore } from "../store/useAppStore";
 import { DiamondLogo } from "./DiamondLogo";
 import type { RootStackParamList } from "../nav-types";
+import { navigationRef } from "../nav";
 
 const ITEMS: { label: string; route: keyof RootStackParamList; desc: string }[] = [
   { label: "Chat", route: "Chat", desc: "Le professeur" },
@@ -29,7 +28,6 @@ export function SideMenu() {
   const theme = useAppStore((s) => s.theme);
   const open = useAppStore((s) => s.menuOpen);
   const setOpen = useAppStore((s) => s.setMenuOpen);
-  const nav = useNavigation<NavigationProp<RootStackParamList>>();
   const anim = useRef(new Animated.Value(0)).current;
   const items = useRef(ITEMS.map(() => new Animated.Value(0))).current;
 
@@ -57,7 +55,9 @@ export function SideMenu() {
 
   const goTo = (route: keyof RootStackParamList) => {
     setOpen(false);
-    (nav.navigate as (n: string, p?: unknown) => void)(route);
+    if (navigationRef.isReady()) {
+      navigationRef.navigate(route as never);
+    }
   };
 
   return (

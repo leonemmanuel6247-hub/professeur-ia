@@ -5,7 +5,7 @@ import { useAppStore } from "../store/useAppStore";
 import { Badge, Btn, Card, Empty, H1, P, ProgressBar, Screen } from "../components/ui";
 import { deleteCourse, isFreeChatCourse } from "../services/courses";
 import { Course } from "../types";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { go } from "../nav";
 import { spacing } from "../theme";
 

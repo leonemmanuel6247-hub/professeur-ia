@@ -1,5 +1,6 @@
 export type RootStackParamList = {
-  Chat: { courseId?: string; conversationId?: string; sectionId?: string; mode?: "lesson" | "free" };
+  Chat: { courseId?: string; conversationId?: string; sectionId?: string; mode?: "lesson" | "free" | "free-new" };
+  NewConversation: { courseId: string; sectionId?: string; mode?: "lesson" | "free" };
   Library: undefined;
   Import: undefined;
   Course: { courseId: string };

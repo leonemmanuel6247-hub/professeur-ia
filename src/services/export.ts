@@ -1,7 +1,6 @@
-import * as FileSystem from "expo-file-system";
-import * as Sharing from "expo-sharing";
 import { Course, CoursePlanSection } from "../types";
 import { listLessons, parseIdentity, parsePlan } from "./courses";
+import { saveAndShare } from "./files";
 
 export async function exportCourseMarkdown(course: Course): Promise<string> {
   const identity = parseIdentity(course.identityJson);
@@ -32,12 +31,7 @@ export async function exportCourseMarkdown(course: Course): Promise<string> {
     lines.push(`---\n\n${l.content}\n`);
   }
   const md = lines.join("\n");
-  const path = `${FileSystem.documentDirectory}${safeName(course.title)}.md`;
-  await FileSystem.writeAsStringAsync(path, md);
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(path, { mimeType: "text/markdown", dialogTitle: "Exporter le cours" });
-  }
-  return path;
+  return saveAndShare(`${safeName(course.title)}.md`, md, "text/markdown");
 }
 
 function safeName(s: string) {

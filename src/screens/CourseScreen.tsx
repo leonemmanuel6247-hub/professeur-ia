@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { Alert, ScrollView, Text, TextInput, View } from "react-native";
-import { NavigationProp, RouteProp, useNavigation, useRoute } from "@react-navigation/native";
+import { NavigationProp, RouteProp, useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import { Btn, Card, Chip, H1, H2, P, ProgressBar, Screen } from "../components/ui";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import {
   countChunks,
   getCourse,
@@ -13,6 +13,7 @@ import {
   parsePlan,
   updateCourse,
 } from "../services/courses";
+import { deleteConversation, listConversationSummaries, ConversationSummary } from "../services/conversations";
 import { exportCourseMarkdown } from "../services/export";
 import { Course, CoursePlanSection, ExperienceRow } from "../types";
 import { ExperienceWeb } from "../components/ExperienceWeb";
@@ -28,6 +29,7 @@ export function CourseScreen() {
   const [chunkCount, setChunkCount] = useState(0);
   const [seen, setSeen] = useState(0);
   const [experiences, setExperiences] = useState<ExperienceRow[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeExp, setActiveExp] = useState<ExperienceRow | null>(null);
   const [preview, setPreview] = useState("");
 
@@ -43,6 +45,7 @@ export function CourseScreen() {
       setSeen(lessons.filter((l) => l.status !== "pending").length);
       const exp = await listExperiences(c.id);
       setExperiences(exp);
+      setConversations(await listConversationSummaries(c.id));
       setActiveExp((prev) => {
         if (prev && exp.some((e) => e.id === prev.id)) return prev;
         return exp[0] ?? null;
@@ -50,9 +53,26 @@ export function CourseScreen() {
     }
   };
 
-  useEffect(() => {
-    load();
-  }, [route.params.courseId]);
+  useFocusEffect(
+    useCallback(() => {
+      load();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route.params.courseId])
+  );
+
+  const removeConversation = (conv: ConversationSummary) => {
+    Alert.alert("Supprimer la conversation", `Supprimer « ${conv.title} » et ses messages ?`, [
+      { text: "Annuler", style: "cancel" },
+      {
+        text: "Supprimer",
+        style: "destructive",
+        onPress: async () => {
+          await deleteConversation(conv.id);
+          await load();
+        },
+      },
+    ]);
+  };
 
   if (!course) {
     return (
@@ -86,8 +106,7 @@ export function CourseScreen() {
         ) : null}
         <ProgressBar value={course.progress} />
         <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 8 }}>
-          <Chip label="Chat libre" onPress={() => nav.navigate("Chat", { courseId: course.id, mode: "free" })} />
-          <Chip label="Exercices" onPress={() => nav.navigate("Exercises", { courseId: course.id })} />
+          <Chip label="Chat libre" onPress={() => nav.navigate("Chat", { courseId: course.id, mode: "free" })} />          <Chip label="Exercices" onPress={() => nav.navigate("Exercises", { courseId: course.id })} />
           <Chip label="Flashcards" onPress={() => nav.navigate("Flashcards", { courseId: course.id })} />
           <Chip
             label="Exporter MD"
@@ -171,6 +190,65 @@ export function CourseScreen() {
                   nav.navigate("Chat", { courseId: course.id, sectionId: s.id, mode: "lesson" })
                 }
               />
+            </View>
+          ))}
+        </Card>
+
+        <Card>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <H2>Conversations ({conversations.length})</H2>
+            <Btn
+              title="+ Nouvelle"
+              onPress={() =>
+                nav.navigate("NewConversation", { courseId: course.id, mode: "free" })
+              }
+            />
+          </View>
+          {conversations.length === 0 ? (
+            <P muted>
+              Aucune conversation. Lance une discussion libre ou une lecon pour la retrouver ici.
+            </P>
+          ) : null}
+          {conversations.map((conv) => (
+            <View
+              key={conv.id}
+              style={{
+                paddingVertical: 10,
+                borderBottomWidth: 1,
+                borderBottomColor: theme.border,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Text style={{ color: theme.text, fontWeight: "600", flex: 1, paddingRight: 8 }} numberOfLines={1}>
+                  {conv.title}
+                </Text>
+                <Text style={{ color: theme.textMuted, fontSize: 11 }}>
+                  {new Date(conv.updatedAt).toLocaleDateString("fr-FR")}
+                </Text>
+              </View>
+              <Text style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }} numberOfLines={2}>
+                {conv.messageCount} message{conv.messageCount > 1 ? "s" : ""}
+                {conv.preview ? ` · ${conv.preview}` : ""}
+              </Text>
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                <Btn
+                  title="Ouvrir"
+                  onPress={() =>
+                    nav.navigate("Chat", {
+                      courseId: course.id,
+                      conversationId: conv.id,
+                      mode: "free",
+                    })
+                  }
+                  style={{ flex: 1 }}
+                />
+                <Btn
+                  title="Supprimer"
+                  variant="danger"
+                  onPress={() => removeConversation(conv)}
+                  style={{ flex: 1 }}
+                />
+              </View>
             </View>
           ))}
         </Card>

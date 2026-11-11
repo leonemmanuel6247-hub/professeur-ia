@@ -1,7 +1,6 @@
-import * as FileSystem from "expo-file-system";
-import * as Sharing from "expo-sharing";
 import { getDb, isFtsAvailable } from "../db/database";
 import { listProfiles } from "./providers";
+import { saveAndShare } from "./files";
 
 export async function exportBackup(): Promise<string> {
   const db = await getDb();
@@ -23,17 +22,11 @@ export async function exportBackup(): Promise<string> {
     data[t] = await db.getAllAsync(`SELECT * FROM ${t}`);
   }
   const json = JSON.stringify({ version: 1, exportedAt: Date.now(), data }, null, 2);
-  const path = `${FileSystem.documentDirectory}professeur-ia-sauvegarde.json`;
-  await FileSystem.writeAsStringAsync(path, json);
-  return path;
+  return saveAndShare("professeur-ia-sauvegarde.json", json, "application/json");
 }
 
 export async function shareBackup() {
-  const path = await exportBackup();
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(path, { mimeType: "application/json", dialogTitle: "Sauvegarde Professeur IA" });
-  }
-  return path;
+  return exportBackup();
 }
 
 export async function restoreBackup(jsonText: string) {
@@ -93,10 +86,5 @@ export async function exportErrorLogText(lines: { createdAt: number; message: st
   const body = lines
     .map((l) => `${new Date(l.createdAt).toISOString()}  ${l.message.replace(/sk-[A-Za-z0-9._-]+/g, "sk-****")}`)
     .join("\n");
-  const path = `${FileSystem.documentDirectory}professeur-ia-erreurs.txt`;
-  await FileSystem.writeAsStringAsync(path, header + body);
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(path, { mimeType: "text/plain" });
-  }
-  return path;
+  return saveAndShare("professeur-ia-erreurs.txt", header + body, "text/plain");
 }

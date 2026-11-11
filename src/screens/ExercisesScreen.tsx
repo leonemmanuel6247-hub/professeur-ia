@@ -3,7 +3,7 @@ import { Alert, ScrollView, Text, TextInput, View } from "react-native";
 import { RouteProp, useRoute } from "@react-navigation/native";
 import { Btn, Card, Chip, H1, H2, P, Screen } from "../components/ui";
 import { MarkdownView } from "../components/MarkdownView";
-import { RootStackParamList } from "../navigation";
+import type { RootStackParamList } from "../nav-types";
 import { useAppStore } from "../store/useAppStore";
 import { ExerciseRow } from "../types";
 import { getCourse, listExercises, saveExercise, searchChunks } from "../services/courses";

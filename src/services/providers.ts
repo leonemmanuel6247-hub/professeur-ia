@@ -97,7 +97,7 @@ export const PRESETS: {
   allowEmptyKey?: boolean;
 }[] = [
   { label: "OpenAI", type: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  { label: "OpenRouter", type: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini" },
+  { label: "OpenRouter", type: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/free" },
   { label: "Groq", type: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
   { label: "NVIDIA NIM", type: "openai", baseUrl: "https://integrate.api.nvidia.com/v1", model: "meta/llama-3.1-70b-instruct" },
   { label: "Gemini", type: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash" },

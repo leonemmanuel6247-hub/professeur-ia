@@ -32,6 +32,78 @@ export async function createConversation(courseId: string, title: string): Promi
   return c;
 }
 
+export async function getConversation(id: string): Promise<Conversation | null> {
+  const db = await getDb();
+  const r = await db.getFirstAsync<Record<string, unknown>>(
+    "SELECT * FROM conversations WHERE id = ?",
+    [id]
+  );
+  if (!r) return null;
+  return {
+    id: String(r.id),
+    courseId: String(r.course_id),
+    title: String(r.title),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export async function renameConversation(id: string, title: string) {
+  const db = await getDb();
+  await db.runAsync("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", [
+    title,
+    Date.now(),
+    id,
+  ]);
+}
+
+export async function deleteConversation(id: string) {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM messages WHERE conversation_id = ?", [id]);
+  await db.runAsync("DELETE FROM conversations WHERE id = ?", [id]);
+}
+
+export interface ConversationSummary extends Conversation {
+  messageCount: number;
+  preview: string;
+}
+
+export async function listConversationSummaries(courseId?: string): Promise<ConversationSummary[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Record<string, unknown>>(
+    courseId
+      ? `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count,
+                (SELECT m.content FROM messages m WHERE m.conversation_id = c.id AND m.content <> '' ORDER BY m.created_at ASC LIMIT 1) AS first_msg
+         FROM conversations c WHERE c.course_id = ? ORDER BY c.updated_at DESC`
+      : `SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count,
+                (SELECT m.content FROM messages m WHERE m.conversation_id = c.id AND m.content <> '' ORDER BY m.created_at ASC LIMIT 1) AS first_msg
+         FROM conversations c ORDER BY c.updated_at DESC`,
+    courseId ? [courseId] : []
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    courseId: String(r.course_id),
+    title: String(r.title),
+    updatedAt: Number(r.updated_at),
+    messageCount: Number(r.msg_count ?? 0),
+    preview: String(r.first_msg ?? "").replace(/\s+/g, " ").slice(0, 120),
+  }));
+}
+
+export async function latestConversation(courseId: string): Promise<Conversation | null> {
+  const db = await getDb();
+  const r = await db.getFirstAsync<Record<string, unknown>>(
+    "SELECT * FROM conversations WHERE course_id = ? ORDER BY updated_at DESC LIMIT 1",
+    [courseId]
+  );
+  if (!r) return null;
+  return {
+    id: String(r.id),
+    courseId: String(r.course_id),
+    title: String(r.title),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
 export async function searchConversations(q: string): Promise<Conversation[]> {
   const db = await getDb();
   const like = `%${q}%`;

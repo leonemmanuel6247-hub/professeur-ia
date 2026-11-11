@@ -192,7 +192,7 @@ export function MarkdownView({ content }: { content: string }) {
   const scale = useAppStore((s) => s.settings.fontScale);
   const blocks = useMemo(() => splitBlocks(content), [content]);
   return (
-    <View>
+    <View style={{ width: "100%" }}>
       {blocks.map((b, i) => {
         if (b.t === "table")
           return (
@@ -260,9 +260,9 @@ export function MarkdownView({ content }: { content: string }) {
           );
         if (b.t === "li")
           return (
-            <View key={i} style={{ flexDirection: "row", marginBottom: 4, paddingLeft: 4 }}>
+            <View key={i} style={{ flexDirection: "row", marginBottom: 4, paddingLeft: 4, width: "100%" }}>
               <Text style={{ color: theme.primary, marginRight: 8 }}>•</Text>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Inline text={b.text} color={theme.text} muted={theme.textMuted} scale={scale} />
               </View>
             </View>
