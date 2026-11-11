@@ -1,5 +1,6 @@
 import * as FileSystem from "expo-file-system";
 import { Platform } from "react-native";
+import { PDFDocument } from "pdf-lib";
 
 const MAX_BYTES = 40 * 1024 * 1024;
 const isWeb = Platform.OS === "web";
@@ -58,7 +59,6 @@ export async function guessMime(name: string, fallback = "application/octet-stre
   if (n.endsWith(".gif")) return "image/gif";
   return fallback;
 }
-
 function base64ToBinary(base64: string): string {
   try {
     if (typeof globalThis.atob === "function") return globalThis.atob(base64);
@@ -76,6 +76,91 @@ function base64ToBinary(base64: string): string {
     out += String.fromCharCode((c1 << 2) | (c2 >> 4));
     if (c3 !== -1 && clean[i + 2] !== undefined) out += String.fromCharCode(((c2 & 15) << 4) | (c3 >> 2));
     if (c4 !== -1 && clean[i + 3] !== undefined) out += String.fromCharCode(((c3 & 3) << 6) | c4);
+  }
+  return out;
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const clean = (base64 || "").replace(/^data:[^,]*,/, "");
+  const binary = base64ToBinary(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  try {
+    if (typeof globalThis.btoa === "function") {
+      let bin = "";
+      const step = 0x8000;
+      for (let i = 0; i < bytes.length; i += step) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + step));
+      }
+      return globalThis.btoa(bin);
+    }
+  } catch {
+    /* fall through */
+  }
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b1 = bytes[i];
+    const b2 = bytes[i + 1];
+    const b3 = bytes[i + 2];
+    out += chars[b1 >> 2];
+    out += chars[((b1 & 3) << 4) | ((b2 ?? 0) >> 4)];
+    out += b2 === undefined ? "=" : chars[((b2 & 15) << 2) | ((b3 ?? 0) >> 6)];
+    out += b3 === undefined ? "=" : chars[b3 & 63];
+  }
+  return out;
+}
+
+
+
+/**
+ * Nombre de pages d'un PDF (via pdf-lib). Retourne 0 si le fichier n'est pas un
+ * PDF exploitable.
+ */
+export async function countPdfPages(base64: string): Promise<number> {
+  try {
+    const bytes = base64ToBytes(base64);
+    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    return doc.getPageCount();
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Decoupe un PDF en tranches de `chunkSize` pages (par defaut 10). Retourne un
+ * tableau ordonne de documents PDF (chacun encode en base64). Le dernier troncon
+ * peut contenir moins de pages (le reste).
+ *
+ * Si le PDF compte `chunkSize` pages ou moins, un seul troncon (le document
+ * entier) est retourne : aucun decoupage inutile.
+ */
+export async function splitPdfIntoChunks(
+  base64: string,
+  chunkSize = 10
+): Promise<{ index: number; pageStart: number; pageEnd: number; dataBase64: string }[]> {
+  const src = await PDFDocument.load(base64ToBytes(base64), { ignoreEncryption: true });
+  const total = src.getPageCount();
+  if (total <= chunkSize) {
+    return [{ index: 0, pageStart: 1, pageEnd: total, dataBase64: base64 }];
+  }
+  const out: { index: number; pageStart: number; pageEnd: number; dataBase64: string }[] = [];
+  for (let start = 0, i = 0; start < total; start += chunkSize, i++) {
+    const end = Math.min(start + chunkSize, total);
+    const dst = await PDFDocument.create();
+    const copied = await dst.copyPages(src, Array.from({ length: end - start }, (_, k) => start + k));
+    for (const p of copied) dst.addPage(p);
+    const bytes = await dst.save();
+    out.push({
+      index: i,
+      pageStart: start + 1,
+      pageEnd: end,
+      dataBase64: bytesToBase64(bytes),
+    });
   }
   return out;
 }

@@ -103,7 +103,9 @@ export class OpenAICompatProvider implements LlmProvider {
     if (!reader) {
       const raw = await res.text().catch(() => "");
       const parsed = parseOpenAiBody(raw);
-      if (!parsed) throw new ProviderError("Reponse fournisseur illisible.", 0, true);
+      if (!parsed || !parsed.text.trim()) {
+        throw new ProviderError("Reponse fournisseur illisible.", 0, true);
+      }
       options.onToken?.(parsed.text);
       return {
         text: parsed.text,
@@ -192,15 +194,17 @@ export class OpenAICompatProvider implements LlmProvider {
     } else {
       // Reponse JSON simple (stream=false) : on parse le corps complet.
       const parsed = parseOpenAiBody(raw);
-      if (!parsed) {
+      if (parsed) {
+        if (parsed.text) {
+          text = parsed.text;
+          options.onToken?.(parsed.text);
+        }
+        promptTok = promptTok || parsed.promptTokens;
+        completionTok = completionTok || parsed.completionTokens;
+      } else if (!text.trim()) {
+        // Ni texte accumule ni corps exploitable : la, seulement, c'est illisible.
         throw new ProviderError("Reponse fournisseur illisible.", 0, true);
       }
-      if (parsed.text) {
-        text = parsed.text;
-        options.onToken?.(parsed.text);
-      }
-      promptTok = promptTok || parsed.promptTokens;
-      completionTok = completionTok || parsed.completionTokens;
     }
 
     return {
@@ -211,22 +215,58 @@ export class OpenAICompatProvider implements LlmProvider {
   }
 }
 
+function contentToString(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          const p = part as Record<string, unknown>;
+          if (typeof p.text === "string") return p.text;
+          if (typeof p.content === "string") return p.content;
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+function pickMessageText(message: Record<string, unknown> | undefined): string {
+  if (!message) return "";
+  const main = contentToString(message.content);
+  if (main) return main;
+  // Certains chatbots-as-API renvoient uniquement la reflexion / un champ texte.
+  return (
+    contentToString(message.reasoning_content) ||
+    contentToString(message.reasoning) ||
+    (typeof message.text === "string" ? message.text : "")
+  );
+}
+
 function parseOpenAiBody(raw: string): { text: string; promptTokens: number; completionTokens: number } | null {
   if (!raw || !raw.trim()) return null;
   const trimmed = raw.trim();
   if (!trimmed.startsWith("data:") && !trimmed.startsWith("event:")) {
     try {
       const json = JSON.parse(trimmed) as {
-        choices?: { message?: { content?: string } }[];
+        choices?: { message?: Record<string, unknown> }[];
+        message?: Record<string, unknown>;
+        content?: unknown;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
+      const msg = json.choices?.[0]?.message ?? json.message;
+      const text = pickMessageText(msg) || contentToString(json.content);
       return {
-        text: json.choices?.[0]?.message?.content ?? "",
+        text,
         promptTokens: json.usage?.prompt_tokens ?? 0,
         completionTokens: json.usage?.completion_tokens ?? 0,
       };
     } catch {
-      return null;
+      // Corps non-JSON (certaines passerelles repondent en texte brut) : on le
+      // considere comme la reponse elle-meme plutot que d'echouer.
+      return { text: trimmed, promptTokens: 0, completionTokens: 0 };
     }
   }
   let text = "";
@@ -239,10 +279,11 @@ function parseOpenAiBody(raw: string): { text: string; promptTokens: number; com
     if (!data || data === "[DONE]") continue;
     try {
       const json = JSON.parse(data) as {
-        choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+        choices?: { delta?: Record<string, unknown>; message?: Record<string, unknown> }[];
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
-      const piece = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
+      const piece =
+        pickMessageText(json.choices?.[0]?.delta) || pickMessageText(json.choices?.[0]?.message);
       if (piece) text += piece;
       if (json.usage) {
         promptTokens = json.usage.prompt_tokens ?? promptTokens;

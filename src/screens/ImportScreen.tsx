@@ -5,7 +5,6 @@ import { Btn, Card, H2, P, ProgressBar, Screen } from "../components/ui";
 import { useAppStore } from "../store/useAppStore";
 import { ingestFromCamera, ingestFromLibrary, ingestPickedFiles } from "../services/ingest";
 import { orderedForRole } from "../services/providers";
-import { countChunks } from "../services/courses";
 import type { RootStackParamList } from "../nav-types";
 import { spacing } from "../theme";
 import { logError } from "../db/database";
@@ -39,15 +38,21 @@ export function ImportScreen() {
         setRatio(r);
       });
       await refresh();
+      const created = res.courses ?? [res.course];
       setActive(res.course.id);
-      const chunks = await countChunks(res.course.id);
-      if (chunks === 0) {
+      if (res.chunkCount === 0) {
         setError(
           "Le document a ete importe mais aucun texte n'a pu etre lu. Essaie un PDF avec texte, ou active l'option Vision/PDF sur un profil IA dans Profils IA."
         );
+      } else if (created.length > 1) {
+        setDone(
+          `${created.length} troncons crees (${res.pageCount} pages, ${res.chunkCount} extraits)${
+            res.usedVision ? " (vision)" : ""
+          }. Ouvre la bibliotheque pour les parcourir.`
+        );
       } else {
         setDone(
-          `${res.pageCount} page(s), ${chunks} extrait(s)${res.usedVision ? " (vision)" : ""}. Ouvre la fiche du cours.`
+          `${res.pageCount} page(s), ${res.chunkCount} extrait(s)${res.usedVision ? " (vision)" : ""}. Ouvre la fiche du cours.`
         );
       }
     } catch (e) {

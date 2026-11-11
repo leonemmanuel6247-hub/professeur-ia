@@ -238,23 +238,8 @@ export function extractSchemaBlocks(text: string): { spec: string | null; html: 
 
 const SCHEMA_LANGS = ["html", "svg", "json", "xml"];
 
-/**
- * Le modele termine sa reponse par un marqueur <FIN> (demande dans le prompt
- * systeme). Ce marqueur n'est qu'un indicateur : il est retire AVANT l'affichage,
- * le stockage et l'envoi a l'historique, pour ne jamais polluer l'interface.
- */
-export function stripFinishMarker(text: string): string {
-  return (text || "")
-    .replace(/[ \t]*<\s*\/?\s*FIN\s*>[ \t]*/gi, "")
-    // Marqueur partiel en cours de reception (ex. "<FI", "</FI") en toute fin de
-    // texte : on le masque pour eviter un artefact visuel pendant le streaming.
-    .replace(/[ \t]*<\s*\/?\s*(?:F|FI|FIN?)?\s*$/i, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
-}
-
 export function stripSchemaFromText(text: string): string {
-  const t = stripFinishMarker(text || "");
+  const t = text || "";
   const { spec, html } = extractSchemaBlocks(t);
   let out = t;
 

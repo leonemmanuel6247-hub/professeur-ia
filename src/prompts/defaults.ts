@@ -15,8 +15,6 @@ REGLES
 - \`\`\`html avec un VRAI dessin executable (SVG et/ou canvas + JS inline). Le HTML DOIT contenir des formes visibles (circle, line, path, rect, canvas.fillRect, etc.). Un schema sans balise <svg> ou <canvas> est INACCEPTABLE.
 9. Pour tout tableau : utilise un tableau Markdown GFM valide, avec une ligne d'en-tete puis une ligne de separation (ex. | Notion | Valeur |\n| --- | --- |\n| ... | ... |). Ne mets pas de tableau dans un bloc de code.
 10. Reponds en francais.
-11. NE T'ARRETE JAMAIS en milieu de reponse : si tu as besoin de reflechir, continue simplement. N'abandonne jamais une formule, un exemple ou un schema en cours.
-12. Quand ta reponse est VRAIMENT terminee (texte pedagogique ET schema inclus, s'il y en a un), ecris le marqueur de fin <FIN> seul sur une derniere ligne, apres tout le reste. N'ecris ce marqueur QUE lorsque tu as fini.
 
 CONTEXTE DU COURS : {fiche_identite}
 EXTRAITS PERTINENTS : {passages}
@@ -82,8 +80,6 @@ INTERDIT de decrire la figure en phrases. Si un schema aide, ecris d'abord un bl
 
 ## Mini-quiz
 2 a 3 questions (reponses a la fin, cachees sous ### Reponses)
-
-NE T'ARRETE JAMAIS en milieu de lecon : si tu as besoin de reflechir, continue simplement. Quand toute la lecon est VRAIMENT terminee, ecris le marqueur <FIN> seul sur la derniere ligne.
 
 {bonus}
 

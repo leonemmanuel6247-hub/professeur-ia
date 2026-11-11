@@ -3,31 +3,31 @@ import * as ImagePicker from "expo-image-picker";
 import { uid } from "../db/database";
 import { AiProfile, Course, CoursePlanSection } from "../types";
 import { LlmMessage } from "../llm/types";
-import { chatUntilFinished } from "../llm/router";
+import { chatWithFallback } from "../llm/router";
 import { fillPrompt } from "../prompts/defaults";
-import { addChunk, addPage, createCourse, updateCourse, listPages, getCourse } from "./courses";
+import { addChunk, addPage, countChunks, createCourse, updateCourse, listPages, getCourse } from "./courses";
 import {
   assertSize,
   chunkText,
+  countPdfPages,
   extractPdfTextHeuristic,
   guessMime,
   readAsBase64,
   splitIntoPages,
+  splitPdfIntoChunks,
 } from "./pdf";
 
 export type IngestProgress = (step: string, ratio: number) => void;
-
-// Instruction imposee a TOUS les appels d'extraction : le modele doit terminer
-// par <FIN>. On lit ce marqueur pour distinguer une vraie fin d'une simple
-// pause de reflexion (le chatbot peut fermer le flux au milieu de sa reponse).
-const FINISH_RULE =
-  "\n\nIMPÉRATIF : ne t'arrête JAMAIS en milieu de réponse, même après une longue pause de réflexion. " +
-  "Lorsque — et seulement lorsque — tu as fini la TOTALITÉ de ta réponse, écris <FIN> seul sur la dernière ligne.";
 
 export interface IngestResult {
   course: Course;
   pageCount: number;
   usedVision: boolean;
+}
+
+export interface IngestBatchResult extends IngestResult {
+  courses: Course[];
+  chunkCount: number;
 }
 
 function extractJson(text: string): Record<string, unknown> | null {
@@ -80,10 +80,10 @@ async function analyzeStructure(
     });
     const messages: LlmMessage[] = [
       { role: "system", content: "Tu reponds uniquement en JSON valide." },
-      { role: "user", content: prompt + FINISH_RULE },
+      { role: "user", content: prompt },
     ];
     try {
-      const res = await chatUntilFinished(profiles, messages, {
+      const res = await chatWithFallback(profiles, messages, {
         temperature: 0.1,
         onToken: li === 0 ? onToken : undefined,
       });
@@ -129,7 +129,7 @@ export async function ingestPickedFiles(
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
+): Promise<IngestBatchResult> {
   const picked = await DocumentPicker.getDocumentAsync({
     type: ["application/pdf", "image/*"],
     multiple: true,
@@ -158,7 +158,7 @@ export async function ingestFromCamera(
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
+): Promise<IngestBatchResult> {
   const perm = await ImagePicker.requestCameraPermissionsAsync();
   if (!perm.granted) throw new Error("Permission camera refusee.");
   const shot = await ImagePicker.launchCameraAsync({
@@ -178,7 +178,7 @@ export async function ingestFromLibrary(
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
+): Promise<IngestBatchResult> {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) throw new Error("Permission photos refusee.");
   const shot = await ImagePicker.launchImageLibraryAsync({
@@ -207,14 +207,12 @@ function looksLikeRealText(text: string): boolean {
   return words > 30;
 }
 
-async function extractPdfPages(
-  uri: string,
+async function extractPdfPagesFromBase64(
+  b64: string,
   name: string,
   profiles: AiProfile[],
   onProgress: IngestProgress
 ): Promise<{ pages: { number: number; text: string }[]; usedVision: boolean }> {
-  onProgress("Lecture du PDF…", 0.1);
-  const b64 = await readAsBase64(uri);
   const readers = profiles.filter((p) => p.supportsNativePdf);
   let pages: { number: number; text: string }[] = [];
   let usedVision = false;
@@ -225,15 +223,13 @@ async function extractPdfPages(
     onProgress("Envoi du PDF au fournisseur...", 0.2);
     usedVision = true;
     const mime = await guessMime(name, "application/pdf");
-    const res = await chatUntilFinished(readers, [
+    const res = await chatWithFallback(readers, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text:
-              "Extrais tout le texte du document, page par page, sous la forme:\n===PAGE n===\ntexte" +
-              FINISH_RULE,
+            text: "Extrais tout le texte du document, page par page, sous la forme:\n===PAGE n===\ntexte",
           },
           { type: "file", mimeType: mime, dataBase64: b64, fileName: name },
         ],
@@ -255,15 +251,13 @@ async function extractPdfPages(
     }
     onProgress("PDF scanne : lecture par vision...", 0.2);
     usedVision = true;
-    const res = await chatUntilFinished(vision, [
+    const res = await chatWithFallback(vision, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text:
-              "Ce PDF n'a pas de texte natif exploitable. Analyse le document fourni et transcris son contenu page par page sous la forme:\n===PAGE n===\ntexte.\nSi vraiment illisible, reponds DOCUMENT_ILLISIBLE." +
-              FINISH_RULE,
+            text: "Ce PDF n'a pas de texte natif exploitable. Analyse le document fourni et transcris son contenu page par page sous la forme:\n===PAGE n===\ntexte.\nSi vraiment illisible, reponds DOCUMENT_ILLISIBLE.",
           },
           { type: "file", mimeType: "application/pdf", dataBase64: b64, fileName: name },
         ],
@@ -272,7 +266,7 @@ async function extractPdfPages(
     if (/DOCUMENT_ILLISIBLE/i.test(res.text) || res.text.length < 40) {
       throw new Error("Document illisible. Photographie les pages une par une.");
     }
-pages = splitIntoPages(res.text).map((t, i) => ({ number: i + 1, text: t }));
+    pages = splitIntoPages(res.text).map((t, i) => ({ number: i + 1, text: t }));
   }
 
   if (!pages.length) throw new Error("Aucune page extraite.");
@@ -285,15 +279,100 @@ pages = splitIntoPages(res.text).map((t, i) => ({ number: i + 1, text: t }));
   return { pages, usedVision };
 }
 
+async function extractPdfPages(
+  uri: string,
+  name: string,
+  profiles: AiProfile[],
+  onProgress: IngestProgress
+): Promise<{ pages: { number: number; text: string }[]; usedVision: boolean }> {
+  onProgress("Lecture du PDF...", 0.1);
+  const b64 = await readAsBase64(uri);
+  return extractPdfPagesFromBase64(b64, name, profiles, onProgress);
+}
+
+const PAGES_PER_CHUNK = 10;
+
+/**
+ * Import d'un PDF. Si le document fait plus de 10 pages, il est d'abord decoupe
+ * en troncons physiques de 10 pages : chaque troncon est ensuite traite comme un
+ * cours independant (extraction, chunks, analyse, lecons). Cela reduit fortement
+ * le volume de tokens envoye par appel et les temps de reflexion du modele.
+ *
+ * Un PDF de 10 pages ou moins n'est pas decoupe : il suit le flux normal.
+ */
 async function ingestPdf(
   uri: string,
   name: string,
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
-  const { pages, usedVision } = await extractPdfPages(uri, name, profiles, onProgress);
-  return persistCourse(name, "pdf", pages, profiles, promptTpl, onProgress, usedVision);
+): Promise<IngestBatchResult> {
+  onProgress("Lecture du PDF...", 0.05);
+  const b64 = await readAsBase64(uri);
+
+  const total = await countPdfPages(b64);
+  if (total > PAGES_PER_CHUNK) {
+    return ingestPdfChunked(b64, name, total, profiles, promptTpl, onProgress);
+  }
+  const { pages, usedVision } = await extractPdfPagesFromBase64(b64, name, profiles, onProgress);
+  const res = await persistCourse(name, "pdf", pages, profiles, promptTpl, onProgress, usedVision);
+  const chunkCount = await countChunks(res.course.id);
+  return { ...res, courses: [res.course], chunkCount };
+}
+
+async function ingestPdfChunked(
+  b64: string,
+  name: string,
+  totalPages: number,
+  profiles: AiProfile[],
+  promptTpl: string,
+  onProgress: IngestProgress
+): Promise<IngestBatchResult> {
+  const baseTitle = name.replace(/\.[^.]+$/, "") || "Document";
+  onProgress(`Decoupage du PDF (${totalPages} pages, tranches de ${PAGES_PER_CHUNK})...`, 0.05);
+  const chunks = await splitPdfIntoChunks(b64, PAGES_PER_CHUNK);
+
+  const courses: Course[] = [];
+  let usedVision = false;
+  let pageCount = 0;
+  let chunkCount = 0;
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const c = chunks[ci];
+    const label = `${baseTitle} — pages ${c.pageStart}-${c.pageEnd}`;
+    const start = 0.1 + 0.85 * (ci / chunks.length);
+    onProgress(`Troncon ${ci + 1}/${chunks.length} (${label})...`, start);
+    try {
+      const { pages, usedVision: uv } = await extractPdfPagesFromBase64(
+        c.dataBase64,
+        `${baseTitle}-p${c.pageStart}-${c.pageEnd}.pdf`,
+        profiles,
+        (s, r) => onProgress(`Troncon ${ci + 1}/${chunks.length} : ${s}`, start + (r * 0.85) / chunks.length)
+      );
+      if (uv) usedVision = true;
+      const res = await persistCourse(
+        label,
+        "pdf",
+        pages,
+        profiles,
+        promptTpl,
+        (s, r) => onProgress(`Troncon ${ci + 1}/${chunks.length} : ${s}`, start + (r * 0.85) / chunks.length),
+        uv
+      );
+      courses.push(res.course);
+      pageCount += res.pageCount;
+      chunkCount += await countChunks(res.course.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      onProgress(`Troncon ${ci + 1}/${chunks.length} ignore : ${msg}`, start);
+    }
+  }
+
+  if (!courses.length) {
+    throw new Error("Aucun troncon n'a pu etre traite. Verifie le PDF ou les profils IA.");
+  }
+  onProgress("Termine", 1);
+  return { course: courses[0], courses, pageCount, usedVision, chunkCount };
 }
 
 async function extractImagePages(
@@ -307,15 +386,13 @@ async function extractImagePages(
     onProgress(`Lecture image ${i + 1}/${files.length}…`, 0.1 + (0.5 * i) / files.length);
     const b64 = await readAsBase64(files[i].uri);
     const mime = await guessMime(files[i].name, "image/jpeg");
-    const res = await chatUntilFinished(vision, [
+    const res = await chatWithFallback(vision, [
       {
         role: "user",
         content: [
           {
             type: "text",
-            text:
-              "Transcris integralement cette page de cours (texte + formules LaTeX). Indique [illisible] si une zone est floue." +
-              FINISH_RULE,
+            text: "Transcris integralement cette page de cours (texte + formules LaTeX). Indique [illisible] si une zone est floue.",
           },
           { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
         ],
@@ -337,10 +414,10 @@ async function ingestImages(
   profiles: AiProfile[],
   promptTpl: string,
   onProgress: IngestProgress
-): Promise<IngestResult> {
+): Promise<IngestBatchResult> {
   const vision = profiles.filter((p) => p.supportsVision);
   const pages = await extractImagePages(files, vision, onProgress);
-  return persistCourse(
+  const res = await persistCourse(
     files.length > 1 ? "Cours (images)" : files[0].name,
     "images",
     pages,
@@ -349,6 +426,8 @@ async function ingestImages(
     onProgress,
     true
   );
+  const chunkCount = await countChunks(res.course.id);
+  return { ...res, courses: [res.course], chunkCount };
 }
 
 function parsePageMarkers(text: string): { number: number; text: string }[] {
