@@ -75,3 +75,76 @@ export async function chatWithFallback(
   }
   throw last ?? new ProviderError("Tous les fournisseurs ont echoue.", 0, true);
 }
+
+export const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
+const MAX_CONTINUATIONS = 20;
+
+/**
+ * Consigne ajoutee aux prompts : la reponse ne se termine que par le marqueur
+ * <FIN>, ecrit uniquement quand tout le contenu est vraiment produit.
+ */
+export const FINISH_INSTRUCTION =
+  "FIN DE REPONSE : quand ta reponse est VRAIMENT terminee, ecris le marqueur <FIN> seul sur la toute derniere ligne, apres tout le reste. N'ecris ce marqueur QUE lorsque tu as fini, jamais avant.";
+
+function stripFinish(text: string): string {
+  return (text || "")
+    .replace(/[ \t]*<\s*\/?\s*FIN\s*>[ \t]*/gi, "")
+    .replace(/[ \t]*<\s*\/?\s*(?:FIN?|FI|F)\s*$/i, "");
+}
+
+/**
+ * Appelle l'IA et REJOUE tant que la balise de fin <FIN> n'est pas presente.
+ * Certains chatbots-API ferment le flux pendant une pause de reflexion : le
+ * texte s'arrete alors en plein milieu de la production. On relance en demandant
+ * la suite tant que le marqueur n'apparait pas, pour ne jamais considerer une
+ * pause comme une fin. Les morceaux sont streamés a l'ecran au fil des tours
+ * via options.onToken, et le texte final est rendu sans le marqueur.
+ */
+export async function chatUntilFinished(
+  profiles: AiProfile[],
+  messages: LlmMessage[],
+  options: ChatOptions = {}
+): Promise<ChatResult & { profileId: string }> {
+  const baseMessages = [...messages];
+  let acc = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let profileId = "";
+
+  for (let round = 0; round < MAX_CONTINUATIONS; round++) {
+    const history: LlmMessage[] = acc
+      ? [
+          ...baseMessages,
+          { role: "assistant", content: acc },
+          {
+            role: "user",
+            content:
+              "Continue EXACTEMENT la ou tu t'es arrete, sans rien repeter et sans recommencer. " +
+              "Rappel : tu ne dois ecrire la balise de fin <FIN> que lorsque toute ta reponse est totalement terminee.",
+          },
+        ]
+      : baseMessages;
+
+    const res = await chatWithFallback(profiles, history, options);
+    profileId = profileId || res.profileId;
+    promptTokens += res.promptTokens;
+    completionTokens += res.completionTokens;
+
+    // On teste la balise sur le texte BRUT de ce tour (sinon elle est deja
+    // retiree) : c'est elle qui signale une vraie fin, pas la fermeture du flux.
+    const finished = FINISH_RE.test(res.text);
+    const piece = stripFinish(res.text);
+    if (piece.trim()) {
+      acc += piece;
+      if (finished) {
+        return { text: acc.trim(), promptTokens, completionTokens, profileId };
+      }
+    } else if (finished) {
+      return { text: acc.trim(), promptTokens, completionTokens, profileId };
+    } else {
+      // Le fournisseur n'a rien renvoye de plus : inutile de relancer encore.
+      break;
+    }
+  }
+  return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
+}

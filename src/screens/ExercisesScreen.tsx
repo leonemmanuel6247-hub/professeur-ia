@@ -2,12 +2,12 @@ import React, { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, TextInput, View } from "react-native";
 import { RouteProp, useRoute } from "@react-navigation/native";
 import { Btn, Card, Chip, H1, H2, P, Screen } from "../components/ui";
-import { MarkdownView } from "../components/MarkdownView";
+import { KatexBubble } from "../components/KatexBubble";
 import type { RootStackParamList } from "../nav-types";
 import { useAppStore } from "../store/useAppStore";
 import { ExerciseRow } from "../types";
 import { getCourse, listExercises, saveExercise, searchChunks } from "../services/courses";
-import { chatWithFallback } from "../llm/router";
+import { chatUntilFinished, FINISH_INSTRUCTION } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { fillPrompt } from "../prompts/defaults";
 import { uid } from "../db/database";
@@ -50,7 +50,13 @@ export function ExercisesScreen() {
         passages: chunks.map((c) => c.text).join("\n"),
       });
       const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
-      const res = await chatWithFallback(ordered, [{ role: "user", content: prompt }]);
+      // Rejoue tant que la balise <FIN> n'est pas recue : les productions
+      // longues (JSON d'exercices) ne sont jamais coupees par une pause du
+      // chatbot. FINISH_INSTRUCTION est ajoutee au cas ou le prompt stocke par
+      // l'utilisateur date d'une version sans la regle.
+      const res = await chatUntilFinished(ordered, [
+        { role: "user", content: prompt + "\n\n" + FINISH_INSTRUCTION },
+      ]);
       const json = extractJson(res.text);
       const list = (json?.exercises as Record<string, unknown>[]) || [];
       for (const e of list) {
@@ -101,7 +107,7 @@ export function ExercisesScreen() {
         {current ? (
           <Card>
             <H2>Enonce</H2>
-            <MarkdownView content={current.prompt} />
+            <KatexBubble content={current.prompt} />
             {hintLevel > 0
               ? hints.slice(0, hintLevel).map((h, i) => (
                   <P key={i} muted>
@@ -139,7 +145,9 @@ export function ExercisesScreen() {
                     passages: chunks.map((c) => c.text).join("\n"),
                   });
                   const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
-                  const res = await chatWithFallback(ordered, [{ role: "user", content: prompt }]);
+                  const res = await chatUntilFinished(ordered, [
+                    { role: "user", content: prompt + "\n\n" + FINISH_INSTRUCTION },
+                  ]);
                   Alert.alert("Correction", res.text.slice(0, 800));
                   const ok = /juste|correct|bonne reponse/i.test(res.text) && !/erreur/i.test(res.text);
                   await recordResult(courseId, (course?.title || "notion") + " / exo", ok);
@@ -150,7 +158,7 @@ export function ExercisesScreen() {
               }}
             />
             <Btn title={showSol ? "Cacher le corrige" : "Voir le corrige"} variant="ghost" onPress={() => setShowSol((s) => !s)} />
-            {showSol ? <MarkdownView content={current.solution} /> : null}
+            {showSol ? <KatexBubble content={current.solution} /> : null}
             <Btn title="Retour liste" variant="ghost" onPress={() => setOpenId(null)} />
           </Card>
         ) : (

@@ -5,7 +5,7 @@ import { ExperienceWeb } from "../components/ExperienceWeb";
 import { useAppStore } from "../store/useAppStore";
 import { listExperiences, saveExperience } from "../services/courses";
 import { ExperienceRow, SchemaSpec } from "../types";
-import { chatWithFallback } from "../llm/router";
+import { chatUntilFinished, FINISH_INSTRUCTION } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { fillPrompt } from "../prompts/defaults";
 import { spacing } from "../theme";
@@ -38,7 +38,11 @@ export function ExperienceScreen() {
         sujet: row.title + "\nSpec:\n" + row.specJson,
         fiche_identite: "",
       });
-      const res = await chatWithFallback(ordered, [{ role: "user", content: prompt }]);
+      // Rejoue tant que la balise <FIN> n'est pas recue : un bloc html coupe par
+      // une pause du chatbot ne serait jamais valide par la WebView.
+      const res = await chatUntilFinished(ordered, [
+        { role: "user", content: prompt + "\n\n" + FINISH_INSTRUCTION },
+      ]);
       const htmlMatch = res.text.match(/```html\s*([\s\S]*?)```/i);
       const html = htmlMatch ? htmlMatch[1] : res.text;
       const next = { ...row, html, status: "pending" as const };

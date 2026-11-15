@@ -51,10 +51,16 @@ export async function buildProfessorMessages(opts: {
     : "N'ajoute AUCUN contenu hors cours.";
   const schemaRule =
     "SCHEMA: si tu dessines, INTERDIT de decrire la figure en texte. Apres le texte pedagogique, un bloc ```json court PUIS un bloc ```html avec un VRAI <svg> ou <canvas> (line/circle/path/rect). Un HTML sans svg/canvas est refuse.";
+  // Ajoute systematiquement au system prompt (meme si le prompt stocke par
+  // l'utilisateur date d'une version sans la regle) : la reponse ne se termine
+  // que par le marqueur <FIN>, ce qui permet a chatUntilFinished de rejouer
+  // tant que la production n'est pas vraiment achevee.
+  const finishRule =
+    "FIN DE REPONSE : quand ta reponse est VRAIMENT terminee, ecris le marqueur <FIN> seul sur la toute derniere ligne, apres tout le reste. Ne t'arrete jamais en milieu de reponse : si tu as besoin de reflechir, continue simplement. N'ecris ce marqueur QUE lorsque tu as fini.";
 
   let history = compressHistory(opts.history);
   const replyBudget = Math.min(4096, Math.floor(opts.maxContext * 0.3));
-  const systemBase = fill(passages) + "\n" + bonus + "\n" + schemaRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "");
+  const systemBase = fill(passages) + "\n" + bonus + "\n" + schemaRule + "\n" + finishRule + (opts.extraInstruction ? `\n${opts.extraInstruction}` : "");
 
   const pack = () => {
     const mapped = history.map((h) => ({
@@ -74,6 +80,8 @@ export async function buildProfessorMessages(opts: {
           bonus +
           "\n" +
           schemaRule +
+          "\n" +
+          finishRule +
           (opts.extraInstruction ? `\n${opts.extraInstruction}` : ""),
       },
       ...mapped,
@@ -238,8 +246,23 @@ export function extractSchemaBlocks(text: string): { spec: string | null; html: 
 
 const SCHEMA_LANGS = ["html", "svg", "json", "xml"];
 
+/**
+ * Le modele termine sa reponse par un marqueur <FIN> (demande dans le prompt
+ * systeme). Ce marqueur n'est qu'un indicateur : il est retire AVANT l'affichage,
+ * le stockage et l'envoi a l'historique, pour ne jamais polluer l'interface.
+ */
+export function stripFinishMarker(text: string): string {
+  return (text || "")
+    .replace(/[ \t]*<\s*\/?\s*FIN\s*>[ \t]*/gi, "")
+    // Marqueur partiel en cours de reception (ex. "<FI", "</FI") en toute fin de
+    // texte : on le masque pour eviter un artefact visuel pendant le streaming.
+    .replace(/[ \t]*<\s*\/?\s*(?:FIN?|FI|F)\s*$/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
 export function stripSchemaFromText(text: string): string {
-  const t = text || "";
+  const t = stripFinishMarker(text || "");
   const { spec, html } = extractSchemaBlocks(t);
   let out = t;
 

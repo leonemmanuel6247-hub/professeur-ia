@@ -19,6 +19,7 @@ import { useAppStore } from "../store/useAppStore";
 import { Btn, Chip, Screen, ProgressBar } from "../components/ui";
 import { DiamondLogo } from "../components/DiamondLogo";
 import { MarkdownView } from "../components/MarkdownView";
+import { KatexBubble } from "../components/KatexBubble";
 import { ExperienceWeb } from "../components/ExperienceWeb";
 import type { RootStackParamList } from "../nav-types";
 import { ChatMessage, Course, SchemaSpec } from "../types";
@@ -30,8 +31,8 @@ import {
   listConversations,
   listMessages,
 } from "../services/conversations";
-import { buildProfessorMessages, extractSchemaBlocks, stripSchemaFromText } from "../services/context";
-import { chatWithFallback } from "../llm/router";
+import { buildProfessorMessages, extractSchemaBlocks, stripFinishMarker, stripSchemaFromText } from "../services/context";
+import { chatUntilFinished } from "../llm/router";
 import { orderedForRole } from "../services/providers";
 import { uid, logError } from "../db/database";
 import { guessMime, readAsBase64, fileSize } from "../services/pdf";
@@ -246,7 +247,9 @@ export function ChatScreen() {
       }
       const ordered = orderedForRole(profiles, "default", settings.defaultProviderId);
       let lastPaint = 0;
-      const res = await chatWithFallback(ordered, built, {
+      // chatUntilFinished : rejoue tant que la balise <FIN> n'est pas recue,
+      // pour ne jamais clore une reponse en plein milieu d'une longue production.
+      const res = await chatUntilFinished(ordered, built, {
         abortSignal: ac.signal,
         maxTokens: Math.max(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.5)),
         onToken: (chunk) => {
@@ -264,7 +267,7 @@ export function ChatScreen() {
         },
       });
       const finalText = res.text && res.text.trim()
-        ? res.text
+        ? stripFinishMarker(res.text)
         : "(Reponse vide recue du fournisseur. Verifie le modele et l'URL dans Profils IA.)";
       await addMessage({
         id: assistantId,
@@ -460,6 +463,7 @@ export function ChatScreen() {
           renderItem={({ item }) => (
             <Bubble
               msg={item}
+              streaming={streaming && item.id === messages[messages.length - 1]?.id}
               onCopy={() => {
                 Clipboard.setStringAsync(item.content).catch(() => undefined);
               }}
@@ -591,7 +595,15 @@ export function ChatScreen() {
   );
 }
 
-function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
+function Bubble({
+  msg,
+  onCopy,
+  streaming,
+}: {
+  msg: ChatMessage;
+  onCopy: () => void;
+  streaming?: boolean;
+}) {
   const theme = useAppStore((s) => s.theme);
   const mine = msg.role === "user";
   const [schemaOpen, setSchemaOpen] = React.useState(true);
@@ -603,6 +615,8 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
   }, [msg.content, mine]);
   const textContent = React.useMemo(() => {
     if (mine) return msg.content || "";
+    // stripSchemaFromText retire aussi le marqueur <FIN> (et un marqueur partiel
+    // en cours de reception) avant l'affichage, le streaming comme le final.
     return stripSchemaFromText(msg.content || "");
   }, [msg.content, mine]);
   return (
@@ -624,7 +638,16 @@ function Bubble({ msg, onCopy }: { msg: ChatMessage; onCopy: () => void }) {
         <Text style={{ color: "#fff", fontSize: 15 }}>{msg.content}</Text>
       ) : (
         <>
-          {textContent ? <MarkdownView content={textContent} /> : null}
+          {textContent ? (
+            // Pendant le streaming : rendu natif leger (le WebView serait
+            // recharge a chaque repaint). Une fois la reponse close : bulle
+            // KaTeX, qui rend reellement les formules mathematiques.
+            streaming ? (
+              <MarkdownView content={textContent} />
+            ) : (
+              <KatexBubble content={textContent} />
+            )
+          ) : null}
           {schema && !schemaHidden ? (
             <View style={{ marginTop: 12 }}>
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>

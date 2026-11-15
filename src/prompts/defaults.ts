@@ -15,6 +15,8 @@ REGLES
 - \`\`\`html avec un VRAI dessin executable (SVG et/ou canvas + JS inline). Le HTML DOIT contenir des formes visibles (circle, line, path, rect, canvas.fillRect, etc.). Un schema sans balise <svg> ou <canvas> est INACCEPTABLE.
 9. Pour tout tableau : utilise un tableau Markdown GFM valide, avec une ligne d'en-tete puis une ligne de separation (ex. | Notion | Valeur |\n| --- | --- |\n| ... | ... |). Ne mets pas de tableau dans un bloc de code.
 10. Reponds en francais.
+11. NE T'ARRETE JAMAIS en milieu de reponse : si tu as besoin de reflechir, continue simplement. N'abandonne jamais une formule, un exemple ou un schema en cours.
+12. Quand ta reponse est VRAIMENT terminee (texte pedagogique ET schema inclus, s'il y en a un), ecris le marqueur <FIN> seul sur une derniere ligne, apres tout le reste. N'ecris ce marqueur QUE lorsque tu as fini.
 
 CONTEXTE DU COURS : {fiche_identite}
 EXTRAITS PERTINENTS : {passages}
@@ -81,6 +83,8 @@ INTERDIT de decrire la figure en phrases. Si un schema aide, ecris d'abord un bl
 ## Mini-quiz
 2 a 3 questions (reponses a la fin, cachees sous ### Reponses)
 
+NE T'ARRETE JAMAIS en milieu de lecon : si tu as besoin de reflechir, continue simplement. Quand toute la lecon est VRAIMENT terminee, ecris le marqueur <FIN> seul sur la derniere ligne.
+
 {bonus}
 
 Section : {section}
@@ -102,12 +106,15 @@ Reponds en JSON :
   ]
 }
 
+NE T'ARRETE JAMAIS en milieu de JSON : continue jusqu'au tableau complet. Quand le JSON est VRAIMENT termine, ecris le marqueur <FIN> seul sur la derniere ligne, apres le JSON.
+
 Fiche : {fiche_identite}
 Extraits : {passages}`,
 
   correction: `L'eleve a ecrit une solution. Localise PRECISEMENT l'etape ou l'erreur apparait.
 Explique pourquoi, propose la correction, sans reveler toute la solution d'un coup si ce n'est pas necessaire.
 Cite les notations du cours.
+NE T'ARRETE JAMAIS en milieu de reponse. Quand ta reponse est VRAIMENT terminee, ecris le marqueur <FIN> seul sur la derniere ligne.
 
 Enonce : {enonce}
 Solution de l'eleve : {solution}
@@ -153,7 +160,9 @@ VISIBILITE (obligatoire) :
 - Legendes et titres visibles, contraste eleve. Pas de texte noir sur fond noir ni blanc sur blanc.
 
 Sujet : {sujet}
-Fiche : {fiche_identite}`,
+Fiche : {fiche_identite}
+
+NE T'ARRETE JAMAIS en milieu de schema : continue jusqu'au bloc \`\`\`html complet. Quand ta reponse est VRAIMENT terminee (bloc json ET bloc html inclus), ecris le marqueur <FIN> seul sur la derniere ligne.`,
 };
 
 export function fillPrompt(template: string, vars: Record<string, string>): string {
