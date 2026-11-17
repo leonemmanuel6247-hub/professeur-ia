@@ -83,6 +83,14 @@ export const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
 // termine la boucle.
 const RETRY_DELAY_BASE_MS = 2000;
 const RETRY_DELAY_MAX_MS = 10000;
+// Pause courte entre deux tours de reprise normaux (reponse incomplete mais
+// sans erreur) : rend le cycle lisible et evite de marteler le fournisseur.
+const REPLAY_DELAY_MS = 1000;
+// Consigne de reprise envoyee a chaque tour sans balise <FIN>. Elle est
+// volontairement stricte sur le "sans rien repeter" : c'est ce qui empeche le
+// modele de RECOMMENCER sa reponse depuis le debut a chaque tour.
+const CONTINUE_INSTRUCTION =
+  "Reprends EXACTEMENT la ou ta reponse ci-dessus s'est arretee (au dernier mot), sans repeter aucune phrase deja ecrite et sans reformuler le debut. Si ta reponse est deja complete, ecris simplement <FIN>. Sinon, continue jusqu'au vrai bout, puis termine par <FIN> seul sur la toute derniere ligne.";
 
 /**
  * Consigne ajoutee aux prompts : la reponse ne se termine que par le marqueur
@@ -115,29 +123,36 @@ export async function chatUntilFinished(
   options: ChatOptions = {}
 ): Promise<ChatResult & { profileId: string }> {
   const baseMessages = [...messages];
+  // Pont de chatbot (NemApi/local) : la session cote fournisseur garde DEJA tout
+  // le contexte du dialogue. Renvoyer le prompt complet a chaque tour collerait
+  // un mega-message dans le chatbot — l'utilisateur verrait son prompt repartir
+  // encore et encore, et le modele redemarrerait sa reponse depuis le debut.
+  // Pour un pont, la reprise n'envoie que la consigne courte.
+  const statefulBridge = profiles.length > 0 && isLocalOpenAi(profiles[0]);
   let acc = "";
   let promptTokens = 0;
   let completionTokens = 0;
   let profileId = "";
   let failures = 0; // reponses vides / erreurs transitoires consecutives
+  let round = 0; // nombre de demandes envoyees pour CETTE reponse
 
   // Boucle infinie volontaire : seule la balise <FIN> (ou le Stop) en sort.
   while (true) {
     // Le bouton Stop est verifie a CHAQUE tour, meme entre deux appels reseau :
     // l'utilisateur garde la main a tout instant.
     if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
-    const history: LlmMessage[] = acc
-      ? [
-          ...baseMessages,
-          { role: "assistant", content: acc },
-          {
-            role: "user",
-            content:
-              "Continue EXACTEMENT la ou tu t'es arrete, sans rien repeter et sans recommencer. " +
-              "Rappel : tu ne dois ecrire la balise de fin <FIN> que lorsque toute ta reponse est totalement terminee.",
-          },
-        ]
-      : baseMessages;
+    round += 1;
+    options.onRound?.(round);
+
+    const history: LlmMessage[] = !acc
+      ? baseMessages
+      : statefulBridge
+        ? [{ role: "user", content: CONTINUE_INSTRUCTION }]
+        : [
+            ...baseMessages,
+            { role: "assistant", content: acc },
+            { role: "user", content: CONTINUE_INSTRUCTION },
+          ];
 
     let res: (ChatResult & { profileId: string }) | null = null;
     try {
@@ -167,16 +182,20 @@ export async function chatUntilFinished(
     if (piece.trim()) {
       failures = 0;
       acc += piece;
-      if (finished) {
-        return { text: acc.trim(), promptTokens, completionTokens, profileId };
-      }
-    } else if (finished) {
-      return { text: acc.trim(), promptTokens, completionTokens, profileId };
     } else {
-      // Reponse vide sans balise (pause du chatbot, flux ferme sans contenu) :
-      // ce n'est pas une fin — on attend puis on rejoue, indefiniment.
+      // Reponse vide (pause du chatbot, flux ferme sans contenu).
       failures += 1;
+    }
+    if (finished) {
+      return { text: acc.trim(), promptTokens, completionTokens, profileId };
+    }
+    // Pas de balise <FIN> : ce n'est PAS une fin. On redemande la suite,
+    // indefiniment — apres une pause (courte si tout va bien, croissante si le
+    // fournisseur echoue ou repond vide).
+    if (failures > 0) {
       await retryDelay(failures, options.abortSignal);
+    } else {
+      await replayDelay(options.abortSignal);
     }
   }
 }
@@ -184,5 +203,10 @@ export async function chatUntilFinished(
 async function retryDelay(failures: number, abortSignal?: AbortSignal): Promise<void> {
   const ms = Math.min(RETRY_DELAY_BASE_MS * Math.max(1, failures), RETRY_DELAY_MAX_MS);
   await new Promise((r) => setTimeout(r, ms));
+  if (abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
+}
+
+async function replayDelay(abortSignal?: AbortSignal): Promise<void> {
+  await new Promise((r) => setTimeout(r, REPLAY_DELAY_MS));
   if (abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
 }

@@ -78,6 +78,9 @@ export function ChatScreen() {
   const sendingRef = useRef(false);
   const [ingesting, setIngesting] = useState<{ step: string; ratio: number } | null>(null);
   const [pendingIntro, setPendingIntro] = useState(false);
+  // Nombre de demandes envoyees pour la reponse en cours (>1 = reprises
+  // automatiques en attendant la balise <FIN> ; affiche a l'ecran).
+  const [replayRound, setReplayRound] = useState(0);
   const nav = useNavigation<NavigationProp<RootStackParamList>>();
 
   const planSections = course && params.mode === "lesson" ? flattenPlan(parsePlan(course.planJson)) : [];
@@ -209,6 +212,7 @@ export function ChatScreen() {
       setMessages([...messagesRef.current]);
       sendStartRef.current = Date.now();
       setStreaming(true);
+      setReplayRound(0);
       const history = messagesRef.current
         .filter((x) => x.role !== "system" && x.id !== assistantId && x.content)
         .slice(-12)
@@ -273,6 +277,7 @@ export function ChatScreen() {
       const res = await chatUntilFinished(ordered, built, {
         abortSignal: ac.signal,
         maxTokens: Math.max(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.5)),
+        onRound: (n) => setReplayRound(n),
         onToken: (chunk) => {
           messagesRef.current = messagesRef.current.map((x) =>
             x.id === assistantId ? { ...x, content: (x.content || "") + chunk } : x
@@ -332,6 +337,7 @@ export function ChatScreen() {
       if (runId === runIdRef.current) {
         sendingRef.current = false;
         setStreaming(false);
+        setReplayRound(0);
         abortRef.current = null;
       }
     }
@@ -518,6 +524,24 @@ export function ChatScreen() {
             />
           )}
         />
+        {streaming && replayRound > 1 ? (
+          <View
+            style={{
+              marginHorizontal: 10,
+              marginTop: 6,
+              paddingVertical: 8,
+              paddingHorizontal: 12,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: theme.border,
+              backgroundColor: theme.surface,
+            }}
+          >
+            <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+              {"Reprise automatique (demande " + replayRound + ") : le modele n'a pas encore ecrit <FIN>, on redemande la suite sans limite."}
+            </Text>
+          </View>
+        ) : null}
         {ingesting ? (
           <View
             style={{

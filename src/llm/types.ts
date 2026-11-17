@@ -13,6 +13,7 @@ export interface ChatOptions {
   maxTokens?: number;
   abortSignal?: AbortSignal;
   onToken?: (chunk: string) => void;
+  onRound?: (round: number) => void;
 }
 
 export interface ChatResult {
