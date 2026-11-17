@@ -77,12 +77,12 @@ export async function chatWithFallback(
 }
 
 export const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
-const MAX_CONTINUATIONS = 20;
-// Pause du chatbot : reponse vide ou echec transient (reseau, corps vide).
-// On retente quelques fois — le "continue" est deja dans l'historique — avant
-// de rendre ce qui a ete produit, sans faire tomber toute la generation.
-const MAX_EMPTY_RETRIES = 2;
-const RETRY_DELAY_MS = 1200;
+// Attente entre deux tentatives quand la reponse est vide ou que l'API transitoire
+// echoue (pause du chatbot, reseau, 429, 5xx). Croissante mais plafonnee : la
+// generation N'EST JAMAIS ABANDONNEE — seule la balise <FIN> (ou le bouton Stop)
+// termine la boucle.
+const RETRY_DELAY_BASE_MS = 2000;
+const RETRY_DELAY_MAX_MS = 10000;
 
 /**
  * Consigne ajoutee aux prompts : la reponse ne se termine que par le marqueur
@@ -98,12 +98,16 @@ function stripFinish(text: string): string {
 }
 
 /**
- * Appelle l'IA et REJOUE tant que la balise de fin <FIN> n'est pas presente.
- * Certains chatbots-API ferment le flux pendant une pause de reflexion : le
- * texte s'arrete alors en plein milieu de la production. On relance en demandant
- * la suite tant que le marqueur n'apparait pas, pour ne jamais considerer une
- * pause comme une fin. Les morceaux sont streamés a l'ecran au fil des tours
- * via options.onToken, et le texte final est rendu sans le marqueur.
+ * Appelle l'IA et ATTEND la reponse eperdument : la boucle ne s'arrete QUE
+ * lorsque la balise de fin <FIN> est recue (ou sur le bouton Stop).
+ * - Reponse incomplete / vide / pause du chatbot : on REJOUE en demandant la
+ *   suite, sans limite de tours.
+ * - Erreur transitoire (reseau, corps vide, 429, 5xx) : on ATTEND puis on
+ *   retente, sans limite — la mission est d'attendre, pas d'abandonner.
+ * - Erreur de configuration (cle invalide, modele introuvable : 4xx sauf 429) :
+ *   remontee immediate pour que l'utilisateur le voie.
+ * Les morceaux sont streamés a l'ecran au fil des tours via options.onToken,
+ * et le texte final est rendu sans le marqueur.
  */
 export async function chatUntilFinished(
   profiles: AiProfile[],
@@ -115,10 +119,13 @@ export async function chatUntilFinished(
   let promptTokens = 0;
   let completionTokens = 0;
   let profileId = "";
-  let consecutiveFailures = 0;
-  let lastError: unknown = null;
+  let failures = 0; // reponses vides / erreurs transitoires consecutives
 
-  for (let round = 0; round < MAX_CONTINUATIONS; round++) {
+  // Boucle infinie volontaire : seule la balise <FIN> (ou le Stop) en sort.
+  while (true) {
+    // Le bouton Stop est verifie a CHAQUE tour, meme entre deux appels reseau :
+    // l'utilisateur garde la main a tout instant.
+    if (options.abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
     const history: LlmMessage[] = acc
       ? [
           ...baseMessages,
@@ -137,24 +144,14 @@ export async function chatUntilFinished(
       res = await chatWithFallback(profiles, history, options);
     } catch (e) {
       if (options.abortSignal?.aborted) throw e;
-      if (e instanceof ProviderError && e.status >= 400) throw e;
-      // Erreur transitoire (reseau, corps vide, "illisible") : tres
-      // probablement la pause du chatbot — on retente au lieu de tout casser.
-      lastError = e;
+      if (e instanceof ProviderError && e.status >= 400 && e.status !== 429) throw e;
+      // Erreur transitoire (reseau, corps vide, "illisible", 429, 5xx) : ce
+      // n'est PAS une fin de reponse. On attend et on retente, indefiniment.
+      failures += 1;
     }
 
     if (!res) {
-      consecutiveFailures += 1;
-      if (consecutiveFailures > MAX_EMPTY_RETRIES) {
-        if (acc.trim()) {
-          // Deja une production en cours : on la rend telle quelle plutot que
-          // d'afficher une erreur, meme sans balise <FIN>.
-          return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
-        }
-        // Rien produit du tout : la c'est une vraie panne, on la remonte.
-        throw lastError ?? new ProviderError("Tous les fournisseurs ont echoue.", 0, true);
-      }
-      await retryDelay(options.abortSignal);
+      await retryDelay(failures, options.abortSignal);
       continue;
     }
 
@@ -163,11 +160,12 @@ export async function chatUntilFinished(
     completionTokens += res.completionTokens;
 
     // On teste la balise sur le texte BRUT de ce tour (sinon elle est deja
-    // retiree) : c'est elle qui signale une vraie fin, pas la fermeture du flux.
+    // retiree) : c'est elle — et elle seule — qui signale une vraie fin, pas
+    // la fermeture du flux ni une reponse vide.
     const finished = FINISH_RE.test(res.text);
     const piece = stripFinish(res.text);
     if (piece.trim()) {
-      consecutiveFailures = 0;
+      failures = 0;
       acc += piece;
       if (finished) {
         return { text: acc.trim(), promptTokens, completionTokens, profileId };
@@ -175,18 +173,16 @@ export async function chatUntilFinished(
     } else if (finished) {
       return { text: acc.trim(), promptTokens, completionTokens, profileId };
     } else {
-      // Reponse vide (pause du chatbot, flux ferme sans contenu) : quelques
-      // tentatives de reprise, puis on rend ce qu'on a sans erreur.
-      consecutiveFailures += 1;
-      if (consecutiveFailures > MAX_EMPTY_RETRIES) break;
-      await retryDelay(options.abortSignal);
-      continue;
+      // Reponse vide sans balise (pause du chatbot, flux ferme sans contenu) :
+      // ce n'est pas une fin — on attend puis on rejoue, indefiniment.
+      failures += 1;
+      await retryDelay(failures, options.abortSignal);
     }
   }
-  return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
 }
 
-async function retryDelay(abortSignal?: AbortSignal): Promise<void> {
-  await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+async function retryDelay(failures: number, abortSignal?: AbortSignal): Promise<void> {
+  const ms = Math.min(RETRY_DELAY_BASE_MS * Math.max(1, failures), RETRY_DELAY_MAX_MS);
+  await new Promise((r) => setTimeout(r, ms));
   if (abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
 }

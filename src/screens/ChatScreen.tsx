@@ -66,6 +66,14 @@ export function ChatScreen() {
   const runIdRef = useRef(0);
   const messagesRef = useRef<ChatMessage[]>([]);
   const listRef = useRef<FlatList>(null);
+  // Suivi de scroll : on accompagne le flux UNIQUEMENT si l'utilisateur est deja
+  // en bas ; s'il remonte pour lire, on ne le deplace jamais. Corrige le
+  // defilement fantome (vue qui glisse seule vers le haut ou le bas lors des
+  // reflow clavier / bulle KaTeX).
+  const nearBottomRef = useRef(true);
+  const followScrollRef = useRef(true);
+  const lastContentHeightRef = useRef(0);
+  const prevMsgCountRef = useRef(0);
   const convIdRef = useRef(params.conversationId || "");
   const sendingRef = useRef(false);
   const [ingesting, setIngesting] = useState<{ step: string; ratio: number } | null>(null);
@@ -127,6 +135,19 @@ export function ChatScreen() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, params.conversationId, params.sectionId]);
+
+  // Message utilisateur envoye ou chargement d'une conversation : on descend en
+  // bas. La croissance d'une reponse en cours, elle, est geree par
+  // onContentSizeChange (suivi conditionne a la position de l'utilisateur).
+  useEffect(() => {
+    const prev = prevMsgCountRef.current;
+    prevMsgCountRef.current = messages.length;
+    if (messages.length > prev && (prev === 0 || messages[messages.length - 1]?.role === "user")) {
+      nearBottomRef.current = true;
+      followScrollRef.current = true;
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+    }
+  }, [messages.length]);
 
   const send = async (text: string, extra?: string, attachment?: Attachment) => {
     if (!course || !(convIdRef.current || convId)) {
@@ -460,6 +481,33 @@ export function ChatScreen() {
           contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
           keyboardShouldPersistTaps="handled"
           removeClippedSubviews={false}
+          scrollEventThrottle={100}
+          // Ancre le premier element visible : quand un contenu AU-DESSUS change
+          // de taille (bulle KaTeX qui se mesure, clavier), la vue ne glisse plus
+          // toute seule vers le haut ou le bas.
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          onScroll={(e) => {
+            const { contentSize, layoutMeasurement, contentOffset } = e.nativeEvent;
+            const distFromBottom =
+              contentSize.height - layoutMeasurement.height - contentOffset.y;
+            nearBottomRef.current = distFromBottom < 140;
+            if (nearBottomRef.current) followScrollRef.current = true;
+          }}
+          onScrollBeginDrag={() => {
+            // L'utilisateur defile lui-meme : on suspend le suivi jusqu'a ce
+            // qu'il revienne pres du bas (onScroll le reactive).
+            followScrollRef.current = false;
+          }}
+          onContentSizeChange={(_w, h) => {
+            const grew = h > lastContentHeightRef.current;
+            lastContentHeightRef.current = h;
+            // On ne bouge JAMAIS la vue quand le contenu retrecit (reflow de la
+            // bulle KaTeX) ; on accompagne la croissance seulement si
+            // l'utilisateur est deja pres du bas.
+            if (grew && followScrollRef.current) {
+              listRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
           renderItem={({ item }) => (
             <Bubble
               msg={item}
