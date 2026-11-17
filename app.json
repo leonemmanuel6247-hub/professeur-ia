@@ -2,7 +2,7 @@
   "expo": {
     "name": "Professeur IA",
     "slug": "professeur-ia",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -22,7 +22,7 @@
         "backgroundColor": "#040615"
       },
       "package": "com.leon.professeuria",
-      "versionCode": 13,
+      "versionCode": 14,
       "permissions": [
         "CAMERA",
         "INTERNET",

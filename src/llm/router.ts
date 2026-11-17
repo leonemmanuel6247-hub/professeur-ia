@@ -78,6 +78,11 @@ export async function chatWithFallback(
 
 export const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
 const MAX_CONTINUATIONS = 20;
+// Pause du chatbot : reponse vide ou echec transient (reseau, corps vide).
+// On retente quelques fois — le "continue" est deja dans l'historique — avant
+// de rendre ce qui a ete produit, sans faire tomber toute la generation.
+const MAX_EMPTY_RETRIES = 2;
+const RETRY_DELAY_MS = 1200;
 
 /**
  * Consigne ajoutee aux prompts : la reponse ne se termine que par le marqueur
@@ -110,6 +115,8 @@ export async function chatUntilFinished(
   let promptTokens = 0;
   let completionTokens = 0;
   let profileId = "";
+  let consecutiveFailures = 0;
+  let lastError: unknown = null;
 
   for (let round = 0; round < MAX_CONTINUATIONS; round++) {
     const history: LlmMessage[] = acc
@@ -125,7 +132,32 @@ export async function chatUntilFinished(
         ]
       : baseMessages;
 
-    const res = await chatWithFallback(profiles, history, options);
+    let res: (ChatResult & { profileId: string }) | null = null;
+    try {
+      res = await chatWithFallback(profiles, history, options);
+    } catch (e) {
+      if (options.abortSignal?.aborted) throw e;
+      if (e instanceof ProviderError && e.status >= 400) throw e;
+      // Erreur transitoire (reseau, corps vide, "illisible") : tres
+      // probablement la pause du chatbot — on retente au lieu de tout casser.
+      lastError = e;
+    }
+
+    if (!res) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures > MAX_EMPTY_RETRIES) {
+        if (acc.trim()) {
+          // Deja une production en cours : on la rend telle quelle plutot que
+          // d'afficher une erreur, meme sans balise <FIN>.
+          return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
+        }
+        // Rien produit du tout : la c'est une vraie panne, on la remonte.
+        throw lastError ?? new ProviderError("Tous les fournisseurs ont echoue.", 0, true);
+      }
+      await retryDelay(options.abortSignal);
+      continue;
+    }
+
     profileId = profileId || res.profileId;
     promptTokens += res.promptTokens;
     completionTokens += res.completionTokens;
@@ -135,6 +167,7 @@ export async function chatUntilFinished(
     const finished = FINISH_RE.test(res.text);
     const piece = stripFinish(res.text);
     if (piece.trim()) {
+      consecutiveFailures = 0;
       acc += piece;
       if (finished) {
         return { text: acc.trim(), promptTokens, completionTokens, profileId };
@@ -142,9 +175,18 @@ export async function chatUntilFinished(
     } else if (finished) {
       return { text: acc.trim(), promptTokens, completionTokens, profileId };
     } else {
-      // Le fournisseur n'a rien renvoye de plus : inutile de relancer encore.
-      break;
+      // Reponse vide (pause du chatbot, flux ferme sans contenu) : quelques
+      // tentatives de reprise, puis on rend ce qu'on a sans erreur.
+      consecutiveFailures += 1;
+      if (consecutiveFailures > MAX_EMPTY_RETRIES) break;
+      await retryDelay(options.abortSignal);
+      continue;
     }
   }
   return { text: stripFinish(acc).trim(), promptTokens, completionTokens, profileId };
+}
+
+async function retryDelay(abortSignal?: AbortSignal): Promise<void> {
+  await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+  if (abortSignal?.aborted) throw new ProviderError("Generation arretee", 0, false);
 }

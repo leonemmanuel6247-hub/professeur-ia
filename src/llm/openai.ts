@@ -104,7 +104,23 @@ export class OpenAICompatProvider implements LlmProvider {
       const raw = await res.text().catch(() => "");
       const parsed = parseOpenAiBody(raw);
       if (!parsed || !parsed.text.trim()) {
-        throw new ProviderError("Reponse fournisseur illisible.", 0, true);
+        if (!raw.trim()) {
+          // Corps vide : le fournisseur a ferme la connexion sans rien envoyer
+          // (pause, surcharge, passerelle qui coupe). Ce n'est pas une erreur
+          // fatale : on rend une reponse vide et chatUntilFinished rejouera.
+          return {
+            text: "",
+            promptTokens: estimateTokens(JSON.stringify(messages)),
+            completionTokens: 0,
+          };
+        }
+        // Corps present mais aucun texte exploitable (format exotique, page de
+        // blocage...) : erreur avec un apercu pour pouvoir diagnostiquer.
+        throw new ProviderError(
+          `Reponse fournisseur illisible (HTTP 200, ${raw.length} octets, debut : ${preview(raw)})`,
+          0,
+          true
+        );
       }
       options.onToken?.(parsed.text);
       return {
@@ -201,10 +217,10 @@ export class OpenAICompatProvider implements LlmProvider {
         }
         promptTok = promptTok || parsed.promptTokens;
         completionTok = completionTok || parsed.completionTokens;
-      } else if (!text.trim()) {
-        // Ni texte accumule ni corps exploitable : la, seulement, c'est illisible.
-        throw new ProviderError("Reponse fournisseur illisible.", 0, true);
       }
+      // Corps vide ou inexploitable (flux ferme sans rien envoyer) : on rend ce
+      // qu'on a (souvent ""), SANS erreur fatale — c'est le cas typique de la
+      // pause du chatbot, que chatUntilFinished gere en rejouant.
     }
 
     return {
@@ -245,6 +261,11 @@ function pickMessageText(message: Record<string, unknown> | undefined): string {
   );
 }
 
+/** Apercu compact d'un corps de reponse pour le message d'erreur. */
+function preview(raw: string): string {
+  return (raw || "").replace(/\s+/g, " ").trim().slice(0, 160) || "(vide)";
+}
+
 function parseOpenAiBody(raw: string): { text: string; promptTokens: number; completionTokens: number } | null {
   if (!raw || !raw.trim()) return null;
   const trimmed = raw.trim();
@@ -264,6 +285,12 @@ function parseOpenAiBody(raw: string): { text: string; promptTokens: number; com
         completionTokens: json.usage?.completion_tokens ?? 0,
       };
     } catch {
+      // Corps non-JSON : texte brut = la reponse elle-meme... SAUF si c'est une
+      // page HTML/XML (blocage proxy, Cloudflare, page d'erreur) : la, rien
+      // d'exploitable, on rend null pour produire une erreur diagnostiquable.
+      if (/^<!doctype\s+html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed) || /^<\?xml/i.test(trimmed)) {
+        return null;
+      }
       // Corps non-JSON (certaines passerelles repondent en texte brut) : on le
       // considere comme la reponse elle-meme plutot que d'echouer.
       return { text: trimmed, promptTokens: 0, completionTokens: 0 };
