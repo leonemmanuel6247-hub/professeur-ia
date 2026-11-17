@@ -76,7 +76,38 @@ export async function chatWithFallback(
   throw last ?? new ProviderError("Tous les fournisseurs ont echoue.", 0, true);
 }
 
-export const FINISH_RE = /<\s*\/?\s*FIN\s*>/i;
+// Fragments de NOTRE consigne de reprise : certains ponts renvoient en echo
+// notre propre message (ou un fragment) au lieu de la reponse du modele. Le
+// "<FIN>" contenu dans une telle citation ne doit JAMAIS etre pris pour une
+// vraie fin — sinon la boucle se clot sur une reponse tronquee (bulle coupee
+// au milieu, alors que le modele avait tout ecrit de son cote).
+const INSTRUCTION_SENTINELS = [
+  "Reprends EXACTEMENT",
+  "sans repeter aucune phrase deja ecrite",
+  "Si ta reponse est deja complete",
+  "seul sur la toute derniere ligne",
+];
+
+function withoutQuotedInstruction(text: string): string {
+  let t = text || "";
+  for (const s of INSTRUCTION_SENTINELS) {
+    // Supprime toute LIGNE citant un fragment de la consigne.
+    t = t
+      .split("\n")
+      .filter((line) => !line.includes(s))
+      .join("\n");
+  }
+  return t;
+}
+
+// La balise doit TERMINER reellement le message (espaces et ponctuation legere
+// toleree juste apres). Un "<FIN>" noye au milieu du texte (citation de la
+// consigne, exemple de cours) ne compte pas comme une fin.
+const FINISH_END_RE = /<\s*\/?\s*FIN\s*>\s*[.!?"'`»]*\s*$/;
+
+export function isGenuineFinish(text: string): boolean {
+  return FINISH_END_RE.test(withoutQuotedInstruction(text).trimEnd());
+}
 // Attente entre deux tentatives quand la reponse est vide ou que l'API transitoire
 // echoue (pause du chatbot, reseau, 429, 5xx). Croissante mais plafonnee : la
 // generation N'EST JAMAIS ABANDONNEE — seule la balise <FIN> (ou le bouton Stop)
@@ -123,12 +154,12 @@ export async function chatUntilFinished(
   options: ChatOptions = {}
 ): Promise<ChatResult & { profileId: string }> {
   const baseMessages = [...messages];
-  // Pont de chatbot (NemApi/local) : la session cote fournisseur garde DEJA tout
-  // le contexte du dialogue. Renvoyer le prompt complet a chaque tour collerait
-  // un mega-message dans le chatbot — l'utilisateur verrait son prompt repartir
-  // encore et encore, et le modele redemarrerait sa reponse depuis le debut.
-  // Pour un pont, la reprise n'envoie que la consigne courte.
-  const statefulBridge = profiles.length > 0 && isLocalOpenAi(profiles[0]);
+  // A partir du 2e tour, on n'envoie JAMAIS le prompt complet de nouveau —
+  // quel que soit le fournisseur. Renvoyer systeme + cours + question + reponse
+  // partielle collerait un mega-message chez le fournisseur : l'utilisateur
+  // verrait son prompt repartir encore et encore, et le modele redemarrerait
+  // sa reponse depuis le debut au lieu de la completer. La reprise ne contient
+  // que la reponse deja recue + la consigne courte "reprends au dernier mot".
   let acc = "";
   let promptTokens = 0;
   let completionTokens = 0;
@@ -146,13 +177,10 @@ export async function chatUntilFinished(
 
     const history: LlmMessage[] = !acc
       ? baseMessages
-      : statefulBridge
-        ? [{ role: "user", content: CONTINUE_INSTRUCTION }]
-        : [
-            ...baseMessages,
-            { role: "assistant", content: acc },
-            { role: "user", content: CONTINUE_INSTRUCTION },
-          ];
+      : [
+          { role: "assistant", content: acc },
+          { role: "user", content: CONTINUE_INSTRUCTION },
+        ];
 
     let res: (ChatResult & { profileId: string }) | null = null;
     try {
@@ -174,11 +202,14 @@ export async function chatUntilFinished(
     promptTokens += res.promptTokens;
     completionTokens += res.completionTokens;
 
-    // On teste la balise sur le texte BRUT de ce tour (sinon elle est deja
-    // retiree) : c'est elle — et elle seule — qui signale une vraie fin, pas
-    // la fermeture du flux ni une reponse vide.
-    const finished = FINISH_RE.test(res.text);
-    const piece = stripFinish(res.text);
+    // Nettoyage AVANT tout : les lignes qui citent notre consigne de reprise
+    // (echo du pont) sont retirees d'abord — elles ne doivent NI declencher une
+    // cloture (le "<FIN>" d'une citation n'est pas une fin), NI polluer la
+    // reponse accumulee. Detection blindee : la balise doit terminer
+    // reellement le message nettoye.
+    const cleaned = withoutQuotedInstruction(res.text);
+    const finished = isGenuineFinish(cleaned);
+    const piece = stripFinish(cleaned);
     if (piece.trim()) {
       failures = 0;
       acc += piece;

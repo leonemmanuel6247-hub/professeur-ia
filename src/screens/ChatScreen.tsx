@@ -276,7 +276,9 @@ export function ChatScreen() {
       // pour ne jamais clore une reponse en plein milieu d'une longue production.
       const res = await chatUntilFinished(ordered, built, {
         abortSignal: ac.signal,
-        maxTokens: Math.max(4096, Math.floor((activeProfile?.maxContext || 128000) * 0.5)),
+        // AUCUN plafond max_tokens : une limite de sortie couperait la reponse
+        // AVANT la balise <FIN> (reponse jamais "finie" alors que le modele a
+        // tout ecrit). La fin est geree par <FIN> + le bouton Stop.
         onRound: (n) => setReplayRound(n),
         onToken: (chunk) => {
           messagesRef.current = messagesRef.current.map((x) =>
